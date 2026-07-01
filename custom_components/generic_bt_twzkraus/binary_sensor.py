@@ -54,6 +54,7 @@ class GenericBTBinarySensor(GenericBTEntity, BinarySensorEntity):
 
     async def subscribe_notify(self, target_uuid):
         await self._device.subscribe_to_notify(target_uuid)
+        await self._device.update()
         self.async_write_ha_state()
 
     async def unsubscribe_notify(self, target_uuid):

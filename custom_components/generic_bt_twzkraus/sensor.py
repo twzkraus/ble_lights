@@ -43,11 +43,9 @@ class GenericBTNotificationSensor(GenericBTEntity, SensorEntity, RestoreEntity):
         await super().async_added_to_hass()
         if self._device.last_notification_value is not None:
             self._attr_native_value = self._device.last_notification_value
-
         restored_state = await self.async_get_last_state()
         if restored_state is not None and restored_state.state not in (None, "unknown", "unavailable"):
             self._attr_native_value = restored_state.state
-
         self.async_write_ha_state()
 
     @callback
@@ -58,8 +56,13 @@ class GenericBTNotificationSensor(GenericBTEntity, SensorEntity, RestoreEntity):
 
     @property
     def native_value(self) -> str | None:
-        """Return the current notification value."""
+        """Return the current notification value as a hex string."""
         return self._attr_native_value
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        """Expose the decoded fields of the settings packet, if available."""
+        return self._device.last_notification_data
 
 
 class GenericBTPreviousNotificationSensor(GenericBTEntity, SensorEntity, RestoreEntity):
@@ -80,11 +83,9 @@ class GenericBTPreviousNotificationSensor(GenericBTEntity, SensorEntity, Restore
         await super().async_added_to_hass()
         if self._device.previous_notification_value is not None:
             self._attr_native_value = self._device.previous_notification_value
-
         restored_state = await self.async_get_last_state()
         if restored_state is not None and restored_state.state not in (None, "unknown", "unavailable"):
             self._attr_native_value = restored_state.state
-
         self.async_write_ha_state()
 
     @callback
@@ -95,5 +96,10 @@ class GenericBTPreviousNotificationSensor(GenericBTEntity, SensorEntity, Restore
 
     @property
     def native_value(self) -> str | None:
-        """Return the previous notification value."""
+        """Return the previous notification value as a hex string."""
         return self._attr_native_value
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        """Expose the decoded fields of the previous settings packet, if available."""
+        return self._device.previous_notification_data

@@ -28,6 +28,7 @@ bleak_exc_module.BleakError = _BleakError
 sys.modules.setdefault("bleak.exc", bleak_exc_module)
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "custom_components" / "generic_bt_twzkraus" / "generic_bt_api" / "device.py"
+SERVICES_PATH = Path(__file__).resolve().parents[1] / "custom_components" / "generic_bt_twzkraus" / "services.yaml"
 SPEC = importlib.util.spec_from_file_location("generic_bt_device", MODULE_PATH)
 DEVICE_MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -35,11 +36,24 @@ SPEC.loader.exec_module(DEVICE_MODULE)
 GenericBTDevice = DEVICE_MODULE.GenericBTDevice
 
 
+def test_subscribe_services_target_the_component_integration():
+    services = SERVICES_PATH.read_text()
+
+    subscribe_block = services.split("subscribe_notify:", 1)[1].split("unsubscribe_notify:", 1)[0]
+    unsubscribe_block = services.split("unsubscribe_notify:", 1)[1]
+
+    assert "integration: generic_bt_twzkraus" in subscribe_block
+    assert "integration: generic_bt_twzkraus" in unsubscribe_block
+
+
 class FakeClient:
     def __init__(self, read_value=None):
         self.notifies = {}
         self.read_value = read_value
         self.read_calls = []
+
+    async def disconnect(self):
+        return None
 
     async def start_notify(self, uuid, callback):
         self.notifies[uuid] = callback
@@ -92,6 +106,20 @@ async def test_notification_subscription_updates_last_value():
     notify_callback(None, b"pattern-2")
 
     assert device.last_notification_value == "pattern-2"
+
+
+@pytest.mark.asyncio
+async def test_notification_payloads_are_decoded_from_common_text_encodings():
+    ble_device = type("BleDevice", (), {"address": "AA:BB:CC:DD:EE:FF"})()
+    device = GenericBTDevice(ble_device)
+    device._client = FakeClient()
+
+    await device.subscribe_to_notify("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
+
+    notify_callback = device._client.notifies[device._to_uuid("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")]
+    notify_callback(None, "test".encode("utf-16-le"))
+
+    assert device.last_notification_value == "test"
 
 
 @pytest.mark.asyncio

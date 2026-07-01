@@ -4,6 +4,7 @@ from uuid import UUID
 from typing import Callable, Optional
 import asyncio
 import logging
+import struct
 from contextlib import AsyncExitStack, suppress
 
 from bleak import BleakClient
@@ -19,6 +20,88 @@ _LOGGER = logging.getLogger(__name__)
 # Default seconds of inactivity before we auto-disconnect.
 # 0 / None disables idle-disconnect entirely.
 DEFAULT_IDLE_DISCONNECT_SECONDS = 30
+
+# requestSettings response is a fixed 40-byte binary struct, NOT text.
+# Layout (little-endian, all unsigned bytes unless noted):
+#   1  program
+#   1  speed
+#   18 colors[6] (hsv triples, 3 bytes each)
+#   1  onOffSwitch
+#   7  timer1Settings
+#   7  timer2Settings
+#   1  brightness
+#   1  version
+#   1  syncMode
+#   1  direction
+#   1  unused
+SETTINGS_PACKET_LENGTH = 40
+_TIMER_STRUCT = struct.Struct("<7B")  # timerOnOff, startSunset, startHour, startMinute, endSunrise, endHour, endMinute
+
+
+def _parse_timer(raw: bytes) -> dict:
+    (timer_on_off, start_sunset, start_hour, start_minute,
+     end_sunrise, end_hour, end_minute) = _TIMER_STRUCT.unpack(raw)
+    return {
+        "timer_on_off": timer_on_off,
+        "start_sunset": start_sunset,
+        "start_hour": start_hour,
+        "start_minute": start_minute,
+        "end_sunrise": end_sunrise,
+        "end_hour": end_hour,
+        "end_minute": end_minute,
+    }
+
+
+def parse_settings_packet(raw_bytes: bytes) -> dict:
+    """Parse the 40-byte requestSettings response into structured fields.
+
+    Raises ValueError if raw_bytes is shorter than the expected packet size.
+    """
+    if len(raw_bytes) < SETTINGS_PACKET_LENGTH:
+        raise ValueError(
+            f"Expected at least {SETTINGS_PACKET_LENGTH} bytes, got {len(raw_bytes)}: {raw_bytes.hex()}"
+        )
+
+    program = raw_bytes[0]
+    speed = raw_bytes[1]
+
+    colors = []
+    offset = 2
+    for _ in range(6):
+        hue, saturation, value = raw_bytes[offset:offset + 3]
+        colors.append({"hue": hue, "saturation": saturation, "value": value})
+        offset += 3
+    # offset == 20 here
+
+    on_off_switch = raw_bytes[offset]
+    offset += 1
+
+    timer1 = _parse_timer(raw_bytes[offset:offset + 7])
+    offset += 7
+    timer2 = _parse_timer(raw_bytes[offset:offset + 7])
+    offset += 7
+
+    brightness = raw_bytes[offset]
+    offset += 1
+    version = raw_bytes[offset]
+    offset += 1
+    sync_mode = raw_bytes[offset]
+    offset += 1
+    direction = raw_bytes[offset]
+    offset += 1
+
+    return {
+        "program": program,
+        "speed": speed,
+        "colors": colors,
+        "on_off_switch": bool(on_off_switch),
+        "timer1": timer1,
+        "timer2": timer2,
+        "brightness": brightness,
+        "version": version,
+        "sync_mode": sync_mode,
+        "direction": direction,
+    }
 
 
 class GenericBTBleakError(Exception):
@@ -51,9 +134,16 @@ class GenericBTDevice:
         self._notify_uuid: Optional[str] = None
         self._read_uuid: Optional[str] = None
         self._notification_callback: Optional[Callable[[str], None]] = None
+        # Whether start_notify has actually been armed on the *current*
+        # self._client. This is distinct from self._notify_uuid, which is
+        # the desired/target subscription and survives disconnects - it's
+        # what get_client() uses to auto-resubscribe on every (re)connect.
+        self._notify_active: bool = False
         self._state_callbacks: list[Callable[[], None]] = []
         self.last_notification_value: Optional[str] = None
         self._previous_notification_value: Optional[str] = None
+        self.last_notification_data: Optional[dict] = None
+        self._previous_notification_data: Optional[dict] = None
 
     def add_listener(self, update_callback: Callable[[], None]) -> Callable[[], None]:
         """Register a callback to be invoked whenever connection state changes.
@@ -78,6 +168,11 @@ class GenericBTDevice:
         """Return the last distinct value seen before the current one."""
         return self._previous_notification_value
 
+    @property
+    def previous_notification_data(self) -> Optional[dict]:
+        """Return the parsed fields of the previous distinct notification, if any."""
+        return self._previous_notification_data
+
     async def update(self):
         if self._read_uuid is None:
             return
@@ -87,8 +182,8 @@ class GenericBTDevice:
             _LOGGER.debug("Unable to read GATT characteristic on update", exc_info=True)
             return
 
-        value = self._decode_data(data)
-        self._update_notification_value(value)
+        message, parsed = self._decode_data(data)
+        self._update_notification_value(message, parsed)
 
     async def stop(self):
         """Called on integration unload/reload - make sure we actually let go of the connection."""
@@ -148,7 +243,12 @@ class GenericBTDevice:
         await self.disconnect()
 
     async def disconnect(self) -> None:
-        """Tear down the BLE connection now, whether idle-timeout or manual/unload triggered."""
+        """Tear down the BLE connection now, whether idle-timeout or manual/unload triggered.
+
+        Note: self._notify_uuid (the desired subscription target) is
+        deliberately left untouched here - get_client() uses it to
+        automatically re-arm notifications the next time we reconnect.
+        """
         async with self._lock:
             self._cancel_idle_timer()
             if self._client is None:
@@ -166,6 +266,7 @@ class GenericBTDevice:
             finally:
                 self._client = None
                 self._client_uses_context_manager = False
+                self._notify_active = False
         self._notify_listeners()
 
     async def get_client(self):
@@ -194,6 +295,13 @@ class GenericBTDevice:
             else:
                 _LOGGER.debug("Connection reused")
 
+            # Whenever we're connected, notifications for the last-desired
+            # UUID should be active - this covers the initial subscribe AND
+            # every reconnect (idle-disconnect, dropped connection, etc.),
+            # so a write made after a reconnect still gets its confirming
+            # notification captured instead of silently going nowhere.
+            await self._ensure_notify_active()
+
         # Outside the lock - resetting the timer doesn't need to block on it,
         # and we don't want to deadlock if this ever gets called from within
         # the idle-disconnect callback path.
@@ -201,49 +309,83 @@ class GenericBTDevice:
         if not was_connected:
             self._notify_listeners()
 
+    async def _ensure_notify_active(self) -> None:
+        """(Re)arm notifications on the current client for the desired UUID.
+
+        No-op if there's no desired subscription, no client, or it's
+        already armed. Must be called while holding self._lock (or before
+        any other task could observe self._client in an inconsistent state).
+        """
+        if self._notify_uuid is None or self._client is None or self._notify_active:
+            return
+        _LOGGER.debug("(Re)arming notifications for UUID %s", self._notify_uuid)
+        uuid = self._to_uuid(self._notify_uuid)
+        await self._client.start_notify(uuid, self._handle_notification)
+        self._notify_active = True
+
+        # Do an immediate read to seed the current value. This talks to
+        # self._client directly rather than going through update()/
+        # read_gatt(), since those call get_client() and would deadlock
+        # trying to reacquire self._lock, which we're already holding here.
+        if self._read_uuid is not None:
+            try:
+                raw = await self._client.read_gatt_char(self._to_uuid(self._read_uuid))
+                message, parsed = self._decode_data(raw)
+                self._update_notification_value(message, parsed)
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.debug("Unable to read the initial GATT value after (re)subscribe", exc_info=True)
+
     def set_state_callback(self, callback: Callable[[], None]) -> None:
         if callback not in self._state_callbacks:
             self._state_callbacks.append(callback)
 
-    def _update_notification_value(self, message: Optional[str]) -> None:
+    def _update_notification_value(self, message: Optional[str], parsed: Optional[dict] = None) -> None:
         if message is None or self.last_notification_value == message:
             return
         self._previous_notification_value = self.last_notification_value
+        self._previous_notification_data = self.last_notification_data
         self.last_notification_value = message
+        self.last_notification_data = parsed
         if self._notification_callback is not None:
             self._notification_callback(message)
         for state_callback in list(self._state_callbacks):
             with suppress(Exception):
                 state_callback()
 
-    def _decode_data(self, data) -> Optional[str]:
+    def _decode_data(self, data) -> tuple[Optional[str], Optional[dict]]:
+        """Decode a raw GATT payload.
+
+        Returns (display_value, parsed_fields). The payload is a fixed-size
+        binary struct (see parse_settings_packet), not text - it must never
+        be run through a text codec, since that produces garbage/misleading
+        results (e.g. a stray byte pair decoding to "ON", or non-ASCII bytes
+        turning into mojibake).
+        """
         if data is None:
-            return None
+            return None, None
         if isinstance(data, (bytes, bytearray)):
             raw_bytes = bytes(data)
             if not raw_bytes:
-                return ""
+                return "", None
 
-            for encoding in ("utf-8", "utf-16-le", "utf-16-be", "utf-16", "latin-1"):
+            if len(raw_bytes) >= SETTINGS_PACKET_LENGTH:
                 try:
-                    decoded = raw_bytes.decode(encoding)
-                except UnicodeDecodeError:
-                    continue
+                    parsed = parse_settings_packet(raw_bytes)
+                except (struct.error, ValueError):
+                    _LOGGER.debug("Failed to parse settings packet: %s", raw_bytes.hex(), exc_info=True)
+                    return raw_bytes.hex(), None
+                return raw_bytes.hex(), parsed
 
-                if encoding in {"utf-16", "utf-16-le", "utf-16-be"}:
-                    return decoded.replace("\x00", "")
-
-                if "\x00" not in decoded:
-                    return decoded
-
-            return raw_bytes.decode("utf-8", errors="replace")
-        return str(data)
+            # Unknown/shorter binary payload - surface it as hex rather than
+            # guessing a text encoding.
+            return raw_bytes.hex(), None
+        return str(data), None
 
     def _handle_notification(self, _sender, data) -> None:
         raw_data = data
-        message = self._decode_data(data)
-        _LOGGER.debug("Received notification payload=%r decoded=%r", raw_data, message)
-        self._update_notification_value(message)
+        message, parsed = self._decode_data(data)
+        _LOGGER.debug("Received notification payload=%r decoded=%r parsed=%r", raw_data, message, parsed)
+        self._update_notification_value(message, parsed)
 
     async def write_gatt(self, target_uuid, data):
         await self.get_client()
@@ -266,26 +408,40 @@ class GenericBTDevice:
         return UUID(uuid_str)
 
     async def subscribe_to_notify(self, target_uuid, callback=None):
-        if self._notify_uuid == target_uuid and self._notification_callback == callback:
-            return
+        """Set the desired notify subscription and ensure it's active.
+
+        This is now just a "declare what I want" call - the actual arming
+        (start_notify) happens inside get_client(), which re-runs it on
+        every connect/reconnect. That means once a subscription has been
+        requested, it stays in effect for the life of the device: an
+        idle-disconnect followed by a write_gatt() will transparently
+        reconnect AND re-arm notifications, so the response to that write
+        still gets captured.
+        """
         if self._notify_uuid is not None and self._notify_uuid != target_uuid:
             await self.unsubscribe_from_notify(self._notify_uuid)
-        await self.get_client()
-        uuid = self._to_uuid(target_uuid)
+
         self._notify_uuid = target_uuid
         self._read_uuid = target_uuid
         self._notification_callback = callback
-        await self._client.start_notify(uuid, self._handle_notification)
+
+        _LOGGER.debug("Subscription target set to UUID %s", target_uuid)
+        await self.get_client()
         self._reset_idle_timer()
 
     async def unsubscribe_from_notify(self, target_uuid):
-        if self._client is None or self._notify_uuid != target_uuid:
+        if self._notify_uuid != target_uuid:
             return
-        with suppress(Exception):
-            await self._client.stop_notify(self._to_uuid(target_uuid))
+
+        _LOGGER.debug("Unsubscribing from notifications for UUID %s", target_uuid)
+        if self._client is not None:
+            with suppress(Exception):
+                await self._client.stop_notify(self._to_uuid(target_uuid))
+
         self._notify_uuid = None
         self._read_uuid = None
         self._notification_callback = None
+        self._notify_active = False
 
     def update_from_advertisement(self, advertisement):
         pass
