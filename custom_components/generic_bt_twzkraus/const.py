@@ -8,6 +8,7 @@ import homeassistant.helpers.config_validation as cv
 DOMAIN = "generic_bt_twzkraus"
 DEVICE_STARTUP_TIMEOUT_SECONDS = 30
 DEFAULT_NOTIFY_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
+DEFAULT_WRITE_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
 
 class Schema(Enum):
     """General used service schema definition"""

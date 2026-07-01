@@ -60,3 +60,26 @@ unsubscribe_notify:
       required: true
       selector:
         text:
+set_colors:
+  target:
+    entity:
+      domain: light
+  fields:
+    color_1:
+      selector:
+        color_rgb:
+    color_2:
+      selector:
+        color_rgb:
+    color_3:
+      selector:
+        color_rgb:
+    color_4:
+      selector:
+        color_rgb:
+    color_5:
+      selector:
+        color_rgb:
+    color_6:
+      selector:
+        color_rgb:
