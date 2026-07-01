@@ -38,7 +38,7 @@ subscribe_notify:
   target:
     entity:
       domain: binary_sensor
-      integration: generic_bt
+      integration: generic_bt_twzkraus
   fields:
     target_uuid:
       name: Target UUID
@@ -52,7 +52,7 @@ unsubscribe_notify:
   target:
     entity:
       domain: binary_sensor
-      integration: generic_bt
+      integration: generic_bt_twzkraus
   fields:
     target_uuid:
       name: Target UUID
