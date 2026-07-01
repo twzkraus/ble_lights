@@ -1,7 +1,7 @@
 """generic bt device"""
 
 from uuid import UUID
-from typing import Callable
+from typing import Callable, Optional
 import asyncio
 import logging
 from contextlib import AsyncExitStack
@@ -27,16 +27,16 @@ class GenericBTTimeoutError(Exception):
 class GenericBTDevice:
     """Generic BT Device Class"""
 
-    def __init__(self, ble_device, idle_disconnect_seconds: float | None = DEFAULT_IDLE_DISCONNECT_SECONDS):
+    def __init__(self, ble_device, idle_disconnect_seconds: Optional[float] = DEFAULT_IDLE_DISCONNECT_SECONDS):
         self._ble_device = ble_device
-        self._client: BleakClient | None = None
+        self._client: Optional[BleakClient] = None
         self._client_stack = AsyncExitStack()
         self._lock = asyncio.Lock()
 
         # idle-disconnect bookkeeping
         self._idle_disconnect_seconds = idle_disconnect_seconds
         self._idle_disconnect_enabled = bool(idle_disconnect_seconds)
-        self._idle_timer_handle: asyncio.TimerHandle | None = None
+        self._idle_timer_handle: Optional[asyncio.TimerHandle] = None
 
         # entities (binary_sensor, switch, ...) register here to be notified
         # whenever connection state changes, regardless of what triggered it
@@ -76,6 +76,10 @@ class GenericBTDevice:
     def idle_disconnect_enabled(self) -> bool:
         return self._idle_disconnect_enabled
 
+    @property
+    def idle_disconnect_seconds(self) -> Optional[float]:
+        return self._idle_disconnect_seconds
+
     def set_idle_disconnect(self, enabled: bool) -> None:
         """Manual toggle - turn idle-disconnect on/off at runtime."""
         self._idle_disconnect_enabled = enabled
@@ -84,7 +88,7 @@ class GenericBTDevice:
         else:
             self._cancel_idle_timer()
 
-    def set_idle_disconnect_seconds(self, seconds: float | None) -> None:
+    def set_idle_disconnect_seconds(self, seconds: Optional[float]) -> None:
         """Adjust the idle window at runtime."""
         self._idle_disconnect_seconds = seconds
         self._idle_disconnect_enabled = bool(seconds)
