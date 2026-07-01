@@ -5,7 +5,7 @@ from enum import Enum
 from homeassistant.helpers.config_validation import make_entity_service_schema
 import homeassistant.helpers.config_validation as cv
 
-DOMAIN = "generic_bt"
+DOMAIN = "generic_bt_twzkraus"
 DEVICE_STARTUP_TIMEOUT_SECONDS = 30
 
 class Schema(Enum):

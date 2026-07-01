@@ -4,7 +4,7 @@ write_gatt:
   target:
     entity:
       domain: binary_sensor
-      integration: generic_bt
+      integration: generic_bt_twzkraus
   fields:
     target_uuid:
       name: Target UUID
@@ -24,7 +24,7 @@ read_gatt:
   target:
     entity:
       domain: binary_sensor
-      integration: generic_bt
+      integration: generic_bt_twzkraus
   fields:
     target_uuid:
       name: Target UUID

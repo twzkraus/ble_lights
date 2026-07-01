@@ -1,4 +1,5 @@
-# generic_bt
+# generic_bt_twzkraus
+
 Generic Bluetooth Integration for Home Assistant
 
-Please check here: https://community.home-assistant.io/t/generic-bluetooth-integration/648952
+Forked from https://github.com/fuatakgun/generic_bt
