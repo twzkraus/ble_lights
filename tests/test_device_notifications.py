@@ -36,14 +36,23 @@ GenericBTDevice = DEVICE_MODULE.GenericBTDevice
 
 
 class FakeClient:
-    def __init__(self):
+    def __init__(self, read_value=None):
         self.notifies = {}
+        self.read_value = read_value
+        self.read_calls = []
 
     async def start_notify(self, uuid, callback):
         self.notifies[uuid] = callback
 
     async def stop_notify(self, uuid):
         self.notifies.pop(uuid, None)
+
+    async def read_gatt_char(self, uuid):
+        self.read_calls.append(uuid)
+        return self.read_value
+
+    async def disconnect(self):
+        return None
 
 
 @pytest.mark.asyncio
@@ -60,3 +69,34 @@ async def test_notification_subscription_updates_last_value():
     notify_callback(None, b"pattern-2")
 
     assert device.last_notification_value == "pattern-2"
+
+
+@pytest.mark.asyncio
+async def test_update_reads_initial_state_from_gatt_on_connect():
+    ble_device = type("BleDevice", (), {"address": "AA:BB:CC:DD:EE:FF"})()
+    device = GenericBTDevice(ble_device)
+    device._client = FakeClient(read_value=b"pattern-1")
+
+    await device.subscribe_to_notify("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
+    await device.update()
+
+    assert device.last_notification_value == "pattern-1"
+    assert device.previous_notification_value is None
+    assert len(device._client.read_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_previous_value_tracks_last_distinct_state():
+    ble_device = type("BleDevice", (), {"address": "AA:BB:CC:DD:EE:FF"})()
+    device = GenericBTDevice(ble_device)
+    device._client = FakeClient()
+
+    await device.subscribe_to_notify("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
+
+    notify_callback = device._client.notifies[device._to_uuid("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")]
+    notify_callback(None, b"pattern-1")
+    notify_callback(None, b"pattern-2")
+    notify_callback(None, b"pattern-2")
+
+    assert device.last_notification_value == "pattern-2"
+    assert device.previous_notification_value == "pattern-1"

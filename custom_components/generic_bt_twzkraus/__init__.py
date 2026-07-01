@@ -36,6 +36,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     with contextlib.suppress(Exception):
         await device.subscribe_to_notify(DEFAULT_NOTIFY_UUID)
+        await device.update()
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

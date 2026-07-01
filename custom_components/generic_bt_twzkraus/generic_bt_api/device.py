@@ -4,7 +4,7 @@ from uuid import UUID
 from typing import Callable, Optional
 import asyncio
 import logging
-from contextlib import AsyncExitStack
+from contextlib import AsyncExitStack, suppress
 
 from bleak import BleakClient
 from bleak.exc import BleakError
@@ -42,7 +42,12 @@ class GenericBTDevice:
         # whenever connection state changes, regardless of what triggered it
         # (manual switch, idle timeout, a write/read service call, unload).
         self._listeners: list[Callable[[], None]] = []
-        self.last_notification_value = None
+        self._notify_uuid: Optional[str] = None
+        self._read_uuid: Optional[str] = None
+        self._notification_callback: Optional[Callable[[str], None]] = None
+        self._state_callbacks: list[Callable[[], None]] = []
+        self.last_notification_value: Optional[str] = None
+        self._previous_notification_value: Optional[str] = None
 
     def add_listener(self, update_callback: Callable[[], None]) -> Callable[[], None]:
         """Register a callback to be invoked whenever connection state changes.
@@ -62,12 +67,33 @@ class GenericBTDevice:
         for update_callback in list(self._listeners):
             update_callback()
 
+    @property
+    def previous_notification_value(self) -> Optional[str]:
+        """Return the last distinct value seen before the current one."""
+        return self._previous_notification_value
+
     async def update(self):
-        pass
+        if self._read_uuid is None:
+            return
+        try:
+            data = await self.read_gatt(self._read_uuid)
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.debug("Unable to read GATT characteristic on update", exc_info=True)
+            return
+
+        if isinstance(data, (bytes, bytearray)):
+            value = data.decode("utf-8", errors="replace")
+        else:
+            value = str(data)
+        self._update_notification_value(value)
 
     async def stop(self):
         """Called on integration unload/reload - make sure we actually let go of the connection."""
         await self.disconnect()
+        self._notify_uuid = None
+        self._read_uuid = None
+        self._notification_callback = None
+        self._state_callbacks = []
 
     @property
     def connected(self):
@@ -156,6 +182,30 @@ class GenericBTDevice:
         if not was_connected:
             self._notify_listeners()
 
+    def set_state_callback(self, callback: Callable[[], None]) -> None:
+        if callback not in self._state_callbacks:
+            self._state_callbacks.append(callback)
+
+    def _update_notification_value(self, message: Optional[str]) -> None:
+        if message is None or self.last_notification_value == message:
+            return
+        self._previous_notification_value = self.last_notification_value
+        self.last_notification_value = message
+        if self._notification_callback is not None:
+            self._notification_callback(message)
+        for state_callback in list(self._state_callbacks):
+            with suppress(Exception):
+                state_callback()
+
+    def _handle_notification(self, _sender, data) -> None:
+        if data is None:
+            return
+        if isinstance(data, (bytes, bytearray)):
+            message = data.decode("utf-8", errors="replace")
+        else:
+            message = str(data)
+        self._update_notification_value(message)
+
     async def write_gatt(self, target_uuid, data):
         await self.get_client()
         uuid_str = "{" + target_uuid + "}"
@@ -176,19 +226,27 @@ class GenericBTDevice:
         uuid_str = "{" + target_uuid + "}"
         return UUID(uuid_str)
 
-    async def subscribe_to_notify(self, target_uuid):
+    async def subscribe_to_notify(self, target_uuid, callback=None):
+        if self._notify_uuid == target_uuid and self._notification_callback == callback:
+            return
+        if self._notify_uuid is not None and self._notify_uuid != target_uuid:
+            await self.unsubscribe_from_notify(self._notify_uuid)
         await self.get_client()
         uuid = self._to_uuid(target_uuid)
-
-        def _callback(_sender, data):
-            if data is not None:
-                if isinstance(data, (bytes, bytearray)):
-                    self.last_notification_value = data.decode("utf-8")
-                else:
-                    self.last_notification_value = str(data)
-
-        await self._client.start_notify(uuid, _callback)
+        self._notify_uuid = target_uuid
+        self._read_uuid = target_uuid
+        self._notification_callback = callback
+        await self._client.start_notify(uuid, self._handle_notification)
         self._reset_idle_timer()
+
+    async def unsubscribe_from_notify(self, target_uuid):
+        if self._client is None or self._notify_uuid != target_uuid:
+            return
+        with suppress(Exception):
+            await self._client.stop_notify(self._to_uuid(target_uuid))
+        self._notify_uuid = None
+        self._read_uuid = None
+        self._notification_callback = None
 
     def update_from_advertisement(self, advertisement):
         pass
