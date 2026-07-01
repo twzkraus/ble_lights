@@ -9,6 +9,11 @@ from contextlib import AsyncExitStack, suppress
 from bleak import BleakClient
 from bleak.exc import BleakError
 
+try:
+    from bleak_retry_connector import establish_connection
+except ImportError:  # pragma: no cover - optional dependency in tests
+    establish_connection = None
+
 _LOGGER = logging.getLogger(__name__)
 
 # Default seconds of inactivity before we auto-disconnect.
@@ -32,6 +37,7 @@ class GenericBTDevice:
         self._client: Optional[BleakClient] = None
         self._client_stack = AsyncExitStack()
         self._lock = asyncio.Lock()
+        self._client_uses_context_manager = False
 
         # idle-disconnect bookkeeping
         self._idle_disconnect_seconds = idle_disconnect_seconds
@@ -81,10 +87,7 @@ class GenericBTDevice:
             _LOGGER.debug("Unable to read GATT characteristic on update", exc_info=True)
             return
 
-        if isinstance(data, (bytes, bytearray)):
-            value = data.decode("utf-8", errors="replace")
-        else:
-            value = str(data)
+        value = self._decode_data(data)
         self._update_notification_value(value)
 
     async def stop(self):
@@ -152,11 +155,17 @@ class GenericBTDevice:
                 return
             _LOGGER.debug("Disconnecting")
             try:
-                await self._client_stack.aclose()
+                if self._client_uses_context_manager:
+                    await self._client_stack.aclose()
+                else:
+                    await self._client.disconnect()
             except BleakError:
                 _LOGGER.debug("Error while disconnecting", exc_info=True)
+            except AttributeError:
+                _LOGGER.debug("Client does not support disconnect()", exc_info=True)
             finally:
                 self._client = None
+                self._client_uses_context_manager = False
         self._notify_listeners()
 
     async def get_client(self):
@@ -165,7 +174,17 @@ class GenericBTDevice:
             if not self._client:
                 _LOGGER.debug("Connecting")
                 try:
-                    self._client = await self._client_stack.enter_async_context(BleakClient(self._ble_device, timeout=30))
+                    if establish_connection is not None:
+                        self._client = await establish_connection(
+                            BleakClient,
+                            self._ble_device,
+                            self._ble_device.address,
+                            timeout=30,
+                        )
+                        self._client_uses_context_manager = False
+                    else:
+                        self._client = await self._client_stack.enter_async_context(BleakClient(self._ble_device, timeout=30))
+                        self._client_uses_context_manager = True
                 except asyncio.TimeoutError as exc:
                     _LOGGER.debug("Timeout on connect", exc_info=True)
                     raise GenericBTTimeoutError("Timeout on connect") from exc
@@ -197,13 +216,33 @@ class GenericBTDevice:
             with suppress(Exception):
                 state_callback()
 
-    def _handle_notification(self, _sender, data) -> None:
+    def _decode_data(self, data) -> Optional[str]:
         if data is None:
-            return
+            return None
         if isinstance(data, (bytes, bytearray)):
-            message = data.decode("utf-8", errors="replace")
-        else:
-            message = str(data)
+            raw_bytes = bytes(data)
+            if not raw_bytes:
+                return ""
+
+            for encoding in ("utf-8", "utf-16-le", "utf-16-be", "utf-16", "latin-1"):
+                try:
+                    decoded = raw_bytes.decode(encoding)
+                except UnicodeDecodeError:
+                    continue
+
+                if encoding in {"utf-16", "utf-16-le", "utf-16-be"}:
+                    return decoded.replace("\x00", "")
+
+                if "\x00" not in decoded:
+                    return decoded
+
+            return raw_bytes.decode("utf-8", errors="replace")
+        return str(data)
+
+    def _handle_notification(self, _sender, data) -> None:
+        raw_data = data
+        message = self._decode_data(data)
+        _LOGGER.debug("Received notification payload=%r decoded=%r", raw_data, message)
         self._update_notification_value(message)
 
     async def write_gatt(self, target_uuid, data):

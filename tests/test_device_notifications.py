@@ -56,6 +56,29 @@ class FakeClient:
 
 
 @pytest.mark.asyncio
+async def test_get_client_uses_bleak_retry_connector_when_available(monkeypatch):
+    ble_device = type("BleDevice", (), {"address": "AA:BB:CC:DD:EE:FF"})()
+    device = GenericBTDevice(ble_device)
+    call_args = {}
+
+    async def fake_establish_connection(client_cls, ble_device_arg, address, timeout=30):
+        call_args["client_cls"] = client_cls
+        call_args["ble_device"] = ble_device_arg
+        call_args["address"] = address
+        call_args["timeout"] = timeout
+        return FakeClient()
+
+    monkeypatch.setattr(DEVICE_MODULE, "establish_connection", fake_establish_connection)
+
+    await device.get_client()
+
+    assert call_args["ble_device"] is ble_device
+    assert call_args["address"] == ble_device.address
+    assert call_args["timeout"] == 30
+    assert device.connected is True
+
+
+@pytest.mark.asyncio
 async def test_notification_subscription_updates_last_value():
     ble_device = type("BleDevice", (), {"address": "AA:BB:CC:DD:EE:FF"})()
     device = GenericBTDevice(ble_device)
