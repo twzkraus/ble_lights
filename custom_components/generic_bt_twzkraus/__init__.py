@@ -1,5 +1,6 @@
 """Support for generic bluetooth devices."""
 
+import contextlib
 import logging
 
 from homeassistant.components import bluetooth
@@ -8,14 +9,14 @@ from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import DOMAIN
+from .const import DEFAULT_NOTIFY_UUID, DOMAIN
 from .coordinator import GenericBTCoordinator
 from .generic_bt_api.device import GenericBTDevice
 
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.NUMBER, Platform.SWITCH]
+PLATFORMS = [Platform.BINARY_SENSOR, Platform.NUMBER, Platform.SWITCH, Platform.SENSOR]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Generic BT from a config entry."""
@@ -33,6 +34,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not await coordinator.async_wait_ready():
         raise ConfigEntryNotReady(f"{address} is not advertising state")
 
+    with contextlib.suppress(Exception):
+        await device.subscribe_to_notify(DEFAULT_NOTIFY_UUID)
+
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -48,6 +52,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     if unload_ok:
+        coordinator: GenericBTCoordinator = hass.data[DOMAIN][entry.entry_id]
+        with contextlib.suppress(Exception):
+            await coordinator.device.stop()
         hass.data[DOMAIN].pop(entry.entry_id)
         if not hass.config_entries.async_entries(DOMAIN):
             hass.data.pop(DOMAIN)

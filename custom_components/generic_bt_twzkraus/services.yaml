@@ -32,3 +32,31 @@ read_gatt:
       required: true
       selector:
         text:
+subscribe_notify:
+  name: Subscribe to Notification UUID
+  description: Subscribe to a notify characteristic and keep the latest value in state
+  target:
+    entity:
+      domain: binary_sensor
+      integration: generic_bt
+  fields:
+    target_uuid:
+      name: Target UUID
+      description: Target UUID
+      required: true
+      selector:
+        text:
+unsubscribe_notify:
+  name: Unsubscribe from Notification UUID
+  description: Stop tracking notifications for a notify characteristic
+  target:
+    entity:
+      domain: binary_sensor
+      integration: generic_bt
+  fields:
+    target_uuid:
+      name: Target UUID
+      description: Target UUID
+      required: true
+      selector:
+        text:

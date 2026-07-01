@@ -42,6 +42,7 @@ class GenericBTDevice:
         # whenever connection state changes, regardless of what triggered it
         # (manual switch, idle timeout, a write/read service call, unload).
         self._listeners: list[Callable[[], None]] = []
+        self.last_notification_value = None
 
     def add_listener(self, update_callback: Callable[[], None]) -> Callable[[], None]:
         """Register a callback to be invoked whenever connection state changes.
@@ -170,6 +171,24 @@ class GenericBTDevice:
         data = await self._client.read_gatt_char(uuid)
         self._reset_idle_timer()
         return data
+
+    def _to_uuid(self, target_uuid):
+        uuid_str = "{" + target_uuid + "}"
+        return UUID(uuid_str)
+
+    async def subscribe_to_notify(self, target_uuid):
+        await self.get_client()
+        uuid = self._to_uuid(target_uuid)
+
+        def _callback(_sender, data):
+            if data is not None:
+                if isinstance(data, (bytes, bytearray)):
+                    self.last_notification_value = data.decode("utf-8")
+                else:
+                    self.last_notification_value = str(data)
+
+        await self._client.start_notify(uuid, _callback)
+        self._reset_idle_timer()
 
     def update_from_advertisement(self, advertisement):
         pass
