@@ -61,25 +61,141 @@ unsubscribe_notify:
       selector:
         text:
 set_colors:
+  name: Set colors
+  description: >-
+    Set 1-6 colors on the light. Provide as many color_N fields as you have
+    colors (color_1, color_2, ...) — the light will use the given colors and
+    repeat them.
   target:
     entity:
       domain: light
+      integration: generic_bt_twzkraus
   fields:
     color_1:
+      name: Color 1
+      description: First color.
+      example: "[255, 0, 0]"
       selector:
         color_rgb:
     color_2:
+      name: Color 2
+      description: Second color.
+      example: "[0, 255, 0]"
       selector:
         color_rgb:
     color_3:
+      name: Color 3
+      description: Third color.
+      example: "[0, 0, 255]"
       selector:
         color_rgb:
     color_4:
+      name: Color 4
+      description: Fourth color.
       selector:
         color_rgb:
     color_5:
+      name: Color 5
+      description: Fifth color.
       selector:
         color_rgb:
     color_6:
+      name: Color 6
+      description: Sixth color.
       selector:
         color_rgb:
+
+set_effect:
+  name: Set effect
+  description: Set the light's effect/program.
+  target:
+    entity:
+      domain: light
+      integration: generic_bt_twzkraus
+  fields:
+    effect:
+      name: Effect
+      description: The effect to run.
+      required: true
+      example: Chase
+      selector:
+        select:
+          options:
+            - Still
+            - Blink
+            - Twinkle
+            - Chase
+            - Moving Wave
+            - Ants
+            - Sparkle
+            - White Sparkle
+            - Three Block
+            - Trains
+            - Cross Fade
+            - Blocks
+            - Block Gradient
+            - Spiral
+            - Shimmer
+            - Glow Worm
+            - Clouds
+            - Color Pulse
+            - Random Placement
+            - Electric Shock
+
+set_speed:
+  name: Set speed
+  description: Set the effect speed.
+  target:
+    entity:
+      domain: light
+      integration: generic_bt_twzkraus
+  fields:
+    speed:
+      name: Speed
+      description: Speed value (0-255).
+      required: true
+      example: 128
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: slider
+
+set_brightness:
+  name: Set brightness
+  description: Set the light's brightness directly.
+  target:
+    entity:
+      domain: light
+      integration: generic_bt_twzkraus
+  fields:
+    brightness:
+      name: Brightness
+      description: Brightness value (0-255).
+      required: true
+      example: 200
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: slider
+
+set_direction:
+  name: Set direction
+  description: Set the effect direction.
+  target:
+    entity:
+      domain: light
+      integration: generic_bt_twzkraus
+  fields:
+    direction:
+      name: Direction
+      description: Direction to run the effect.
+      required: true
+      example: Center
+      selector:
+        select:
+          options:
+            - Left
+            - Center
+            - Right
