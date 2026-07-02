@@ -81,7 +81,7 @@ class GenericBTStateSensor(GenericBTEntity, SensorEntity, RestoreEntity):
         data = self._current_data()
         if data is None:
             return
-        self._attr_native_value = STATE_ON if data.get("on_off_switch") else STATE_OFF
+        self._attr_native_value = STATE_ON if data.get("is_on") else STATE_OFF
 
     @property
     def native_value(self) -> str | None:
@@ -94,7 +94,7 @@ class GenericBTStateSensor(GenericBTEntity, SensorEntity, RestoreEntity):
         data = self._current_data()
         if data is None:
             return None
-        return {key: value for key, value in data.items() if key != "on_off_switch"}
+        return {key: value for key, value in data.items() if key != "is_on"}
 
     async def async_request_settings(self, target_uuid: str | None = None, timeout: float | None = None) -> None:
         """Entity service handler: manually trigger a requestSettings round-trip.

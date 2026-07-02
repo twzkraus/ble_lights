@@ -56,55 +56,111 @@ def _parse_timer(raw: bytes) -> dict:
     }
 
 
-def parse_settings_packet(raw_bytes: bytes) -> dict:
-    """Parse the 40-byte requestSettings response into structured fields.
+SETTINGS_PACKET_LENGTH = 40
 
-    Raises ValueError if raw_bytes is shorter than the expected packet size.
-    """
+# Mappings for human-readable attributes
+PROGRAM_MAPPING = {
+    b"0": "Still",
+    b"B": "Blink",
+    b"W": "Twinkle",
+    b"C": "Chase",
+    b"M": "Moving Wave",
+    b"A": "Ants",
+    b"S": "Sparkle",
+    b"P": "White Sparkle",
+    b"3": "Three Block",
+    b"T": "Trains",
+    b"F": "Cross Fade",
+    b"L": "Blocks",
+    b"K": "Block Gradient",
+    b"I": "Spiral",
+    b"H": "Shimmer",
+    b"G": "Glow Worm",
+    b"Y": "Clouds",
+    b"U": "Color Pulse",
+    b"R": "Random Placement",
+    b"E": "Electric Shock",
+}
+
+DIRECTION_MAPPING = {
+    0: "Left",
+    1: "Center",
+    2: "Right"
+}
+
+SYNC_MODE_MAPPING = {
+    0: "Standalone",
+    1: "Master",
+    2: "Slave"
+}
+
+def parse_settings_packet(raw_bytes: bytes) -> dict:
+    """Parse the 40-byte requestSettings response into structured fields."""
     if len(raw_bytes) < SETTINGS_PACKET_LENGTH:
         raise ValueError(
             f"Expected at least {SETTINGS_PACKET_LENGTH} bytes, got {len(raw_bytes)}: {raw_bytes.hex()}"
         )
 
-    program = raw_bytes[0]
-    speed = raw_bytes[1]
+    # Slice exactly the first 40 bytes to ensure consistency in the output array
+    packet = raw_bytes[:SETTINGS_PACKET_LENGTH]
 
+    # 1. Program (Parsed as a 1-byte ASCII character string)
+    program_byte = packet[0:1]
+    program_code = program_byte.decode('ascii', errors='replace')
+    program_name = PROGRAM_MAPPING.get(program_byte, "Unknown")
+
+    speed = packet[1]
+
+    # 2. Colors (6 slots of HSV, 3 bytes each)
     colors = []
     offset = 2
     for _ in range(6):
-        hue, saturation, value = raw_bytes[offset:offset + 3]
+        hue, saturation, value = packet[offset:offset + 3]
         colors.append({"hue": hue, "saturation": saturation, "value": value})
         offset += 3
-    # offset == 20 here
 
-    on_off_switch = raw_bytes[offset]
+    # 3. On/Off Switch
+    on_off_switch = packet[offset]
     offset += 1
 
-    timer1 = _parse_timer(raw_bytes[offset:offset + 7])
+    # 4. Timers
+    timer1 = _parse_timer(packet[offset:offset + 7])
     offset += 7
-    timer2 = _parse_timer(raw_bytes[offset:offset + 7])
+    timer2 = _parse_timer(packet[offset:offset + 7])
     offset += 7
 
-    brightness = raw_bytes[offset]
+    # 5. Miscellaneous Settings
+    brightness = packet[offset]
     offset += 1
-    version = raw_bytes[offset]
+    version = packet[offset]
     offset += 1
-    sync_mode = raw_bytes[offset]
+
+    sync_code = packet[offset]
+    sync_name = SYNC_MODE_MAPPING.get(sync_code, "Unknown")
     offset += 1
-    direction = raw_bytes[offset]
-    offset += 1
+
+    direction_code = packet[offset]
+    direction_name = DIRECTION_MAPPING.get(direction_code, "Unknown")
+    offset += 1 # offset becomes 39 here
+
+    # Note: packet[39] is the 40th byte. It is left unparsed based on the schema,
+    # but it is safely preserved inside the 'raw_byte_array' below.
 
     return {
-        "program": program,
+        "program_code": program_code,
+        "program_name": program_name,
         "speed": speed,
         "colors": colors,
-        "on_off_switch": bool(on_off_switch),
+        "is_on": bool(on_off_switch),
         "timer1": timer1,
         "timer2": timer2,
         "brightness": brightness,
         "version": version,
-        "sync_mode": sync_mode,
-        "direction": direction,
+        "sync_code": sync_code,
+        "sync_name": sync_name,
+        "direction_code": direction_code,
+        "direction_name": direction_name,
+        "raw_byte_array": list(packet),
     }
 
 
