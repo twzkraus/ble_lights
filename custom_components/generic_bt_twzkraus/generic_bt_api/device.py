@@ -6,6 +6,7 @@ import asyncio
 import logging
 import struct
 from contextlib import AsyncExitStack, suppress
+from ..const import NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS
 
 from bleak import BleakClient
 from bleak.exc import BleakError
@@ -36,13 +37,6 @@ DEFAULT_IDLE_DISCONNECT_SECONDS = 30
 #   1  unused
 SETTINGS_PACKET_LENGTH = 40
 _TIMER_STRUCT = struct.Struct("<7B")  # timerOnOff, startSunset, startHour, startMinute, endSunrise, endHour, endMinute
-
-# Notifications can arrive as several BLE fragments (MTU-limited) rather than
-# one 40-byte chunk - e.g. 5 + 15 + 20 bytes. We buffer fragments until we
-# have a full packet. The full packet typically lands within ~2s of the
-# request; this timeout is a generous safety margin before we give up and
-# discard a partial/stalled sequence rather than let it linger forever.
-NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS = 6
 
 # "requestSettings" command: [1-byte length of payload below][ASCII payload]
 REQUEST_SETTINGS_COMMAND_HEX = "0f7265717565737453657474696e6773"

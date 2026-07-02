@@ -14,7 +14,6 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from .const import DEFAULT_NOTIFY_UUID, DEFAULT_WRITE_UUID, DOMAIN, NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS, Schema
 from .coordinator import GenericBTCoordinator
 from .entity import GenericBTEntity
-from .generic_bt_api.device import NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
