@@ -37,6 +37,16 @@ DEFAULT_IDLE_DISCONNECT_SECONDS = 30
 SETTINGS_PACKET_LENGTH = 40
 _TIMER_STRUCT = struct.Struct("<7B")  # timerOnOff, startSunset, startHour, startMinute, endSunrise, endHour, endMinute
 
+# Notifications can arrive as several BLE fragments (MTU-limited) rather than
+# one 40-byte chunk - e.g. 5 + 15 + 20 bytes. We buffer fragments until we
+# have a full packet. The full packet typically lands within ~2s of the
+# request; this timeout is a generous safety margin before we give up and
+# discard a partial/stalled sequence rather than let it linger forever.
+NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS = 6
+
+# "requestSettings" command: [1-byte length of payload below][ASCII payload]
+REQUEST_SETTINGS_COMMAND_HEX = "0f7265717565737453657474696e6773"
+
 
 def _parse_timer(raw: bytes) -> dict:
     (timer_on_off, start_sunset, start_hour, start_minute,
@@ -145,6 +155,16 @@ class GenericBTDevice:
         self.last_notification_data: Optional[dict] = None
         self._previous_notification_data: Optional[dict] = None
 
+        # Fragmented-notification reassembly. Bytes accumulate here across
+        # multiple _handle_notification calls until we have a full packet
+        # (or the reassembly timer fires and we give up on this attempt).
+        self._notification_buffer: bytearray = bytearray()
+        self._reassembly_timer_handle: Optional[asyncio.TimerHandle] = None
+
+        # Futures for callers awaiting the next complete response via
+        # request_and_wait()/request_settings().
+        self._pending_response_futures: list[asyncio.Future] = []
+
     def add_listener(self, update_callback: Callable[[], None]) -> Callable[[], None]:
         """Register a callback to be invoked whenever connection state changes.
 
@@ -192,6 +212,9 @@ class GenericBTDevice:
         self._read_uuid = None
         self._notification_callback = None
         self._state_callbacks = []
+        self._cancel_reassembly_timer()
+        self._notification_buffer = bytearray()
+        self._fail_pending_response_futures(RuntimeError("Device stopped"))
 
     @property
     def connected(self):
@@ -382,10 +405,87 @@ class GenericBTDevice:
         return str(data), None
 
     def _handle_notification(self, _sender, data) -> None:
-        raw_data = data
-        message, parsed = self._decode_data(data)
-        _LOGGER.debug("Received notification payload=%r decoded=%r parsed=%r", raw_data, message, parsed)
+        """Accumulate a notification fragment; surface the value only once a full packet is assembled.
+
+        BLE notifications can arrive split across multiple MTU-limited
+        fragments (observed: 5, 15, then 20 bytes for one 40-byte packet).
+        Nothing is written to last_notification_value/last_notification_data
+        - and therefore no sensor updates - until we've accumulated a full
+        SETTINGS_PACKET_LENGTH worth of bytes. Partial state is never
+        exposed.
+        """
+        fragment = bytes(data)
+        _LOGGER.debug(
+            "Received notification fragment len=%d bytes=%s (buffered before=%d)",
+            len(fragment), fragment.hex(), len(self._notification_buffer),
+        )
+
+        if not self._notification_buffer:
+            self._start_reassembly_timer()
+
+        self._notification_buffer.extend(fragment)
+
+        if len(self._notification_buffer) >= SETTINGS_PACKET_LENGTH:
+            self._complete_reassembly()
+
+    def _start_reassembly_timer(self) -> None:
+        self._cancel_reassembly_timer()
+        loop = asyncio.get_event_loop()
+        self._reassembly_timer_handle = loop.call_later(
+            NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS, self._on_reassembly_timeout
+        )
+
+    def _cancel_reassembly_timer(self) -> None:
+        if self._reassembly_timer_handle is not None:
+            self._reassembly_timer_handle.cancel()
+            self._reassembly_timer_handle = None
+
+    def _on_reassembly_timeout(self) -> None:
+        """Give up on an incomplete fragment sequence."""
+        self._reassembly_timer_handle = None
+        if self._notification_buffer:
+            _LOGGER.debug(
+                "Discarding %d incomplete notification bytes after %.0fs reassembly timeout: %s",
+                len(self._notification_buffer),
+                NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
+                bytes(self._notification_buffer).hex(),
+            )
+        self._notification_buffer = bytearray()
+        self._fail_pending_response_futures(
+            TimeoutError(f"No complete {SETTINGS_PACKET_LENGTH}-byte response within "
+                         f"{NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS}s")
+        )
+
+    def _complete_reassembly(self) -> None:
+        """We have >= a full packet's worth of bytes - decode it and surface the result."""
+        self._cancel_reassembly_timer()
+
+        complete_bytes = bytes(self._notification_buffer[:SETTINGS_PACKET_LENGTH])
+        leftover = self._notification_buffer[SETTINGS_PACKET_LENGTH:]
+        self._notification_buffer = bytearray(leftover)
+
+        message, parsed = self._decode_data(complete_bytes)
+        _LOGGER.debug("Reassembled complete notification payload=%r parsed=%r", message, parsed)
         self._update_notification_value(message, parsed)
+        self._resolve_pending_response_futures(parsed)
+
+        # Rare: the device sent us the start of a *second* packet in the
+        # same batch of fragments. Give it its own reassembly window rather
+        # than silently dropping it.
+        if self._notification_buffer:
+            self._start_reassembly_timer()
+
+    def _resolve_pending_response_futures(self, parsed: Optional[dict]) -> None:
+        futures, self._pending_response_futures = self._pending_response_futures, []
+        for future in futures:
+            if not future.done():
+                future.set_result(parsed)
+
+    def _fail_pending_response_futures(self, exc: Exception) -> None:
+        futures, self._pending_response_futures = self._pending_response_futures, []
+        for future in futures:
+            if not future.done():
+                future.set_exception(exc)
 
     async def write_gatt(self, target_uuid, data):
         await self.get_client()
@@ -442,6 +542,57 @@ class GenericBTDevice:
         self._read_uuid = None
         self._notification_callback = None
         self._notify_active = False
+
+    async def request_and_wait(
+        self,
+        write_uuid: str,
+        command_hex: str,
+        *,
+        notify_uuid: Optional[str] = None,
+        timeout: float = NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
+    ) -> Optional[dict]:
+        """Subscribe (if needed), send a write command, and wait for the next full response.
+
+        Ensures notifications are subscribed on `notify_uuid` (or the
+        already-active subscription if `notify_uuid` is omitted), sends
+        `command_hex` to `write_uuid`, then waits for a complete
+        (SETTINGS_PACKET_LENGTH-byte) notification to be reassembled.
+
+        Returns the parsed settings dict, or None if no complete response
+        arrived within `timeout` seconds.
+        """
+        if notify_uuid is not None:
+            if self._notify_uuid != notify_uuid:
+                await self.subscribe_to_notify(notify_uuid, callback=self._notification_callback)
+        elif self._notify_uuid is None:
+            raise ValueError("No notify UUID is subscribed and none was provided")
+        else:
+            # Make sure we're connected and the existing subscription is armed
+            # (e.g. after an idle-disconnect) before we send the command.
+            await self.get_client()
+
+        response_future: asyncio.Future = asyncio.get_event_loop().create_future()
+        self._pending_response_futures.append(response_future)
+        try:
+            await self.write_gatt(write_uuid, command_hex)
+            return await asyncio.wait_for(response_future, timeout=timeout)
+        except (asyncio.TimeoutError, TimeoutError):
+            _LOGGER.debug("Timed out waiting for a complete response to command %s", command_hex)
+            return None
+        finally:
+            with suppress(ValueError):
+                self._pending_response_futures.remove(response_future)
+
+    async def request_settings(
+        self,
+        write_uuid: str,
+        notify_uuid: Optional[str] = None,
+        timeout: float = NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
+    ) -> Optional[dict]:
+        """Convenience wrapper: send the requestSettings command and wait for the parsed reply."""
+        return await self.request_and_wait(
+            write_uuid, REQUEST_SETTINGS_COMMAND_HEX, notify_uuid=notify_uuid, timeout=timeout
+        )
 
     def update_from_advertisement(self, advertisement):
         pass

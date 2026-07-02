@@ -39,7 +39,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # which silently discarded any failure
     try:
         await device.subscribe_to_notify(DEFAULT_NOTIFY_UUID)
-        await device.update()
     except Exception:  # pylint: disable=broad-except
         _LOGGER.warning(
             "Failed to subscribe to notifications for %s on UUID %s - "
