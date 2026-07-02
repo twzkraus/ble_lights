@@ -199,3 +199,22 @@ set_direction:
             - Left
             - Center
             - Right
+request_settings:
+  name: Request settings
+  description: Request the light to send its current settings.
+  target:
+    entity:
+      domain: sensor
+      integration: generic_bt_twzkraus
+  fields:
+    target_uuid:
+      name: Target UUID
+      description: Target UUID
+      required: false
+      selector:
+        text:
+    timeout:
+      name: Timeout
+      description: Timeout in seconds to wait for the response.
+      required: false
+      default: 6

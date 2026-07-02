@@ -34,3 +34,12 @@ class Schema(Enum):
             vol.Required("target_uuid"): cv.string
         }
     )
+    # target_uuid defaults to DEFAULT_WRITE_UUID and timeout defaults to the
+    # device's own reassembly timeout if not provided - see
+    # GenericBTStateSensor.async_request_settings.
+    REQUEST_SETTINGS = make_entity_service_schema(
+        {
+            vol.Optional("target_uuid"): cv.string,
+            vol.Optional("timeout", default=6.0): vol.Coerce(float),
+        }
+    )
