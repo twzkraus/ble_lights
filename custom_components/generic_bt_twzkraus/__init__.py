@@ -27,16 +27,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not ble_device:
         raise ConfigEntryNotReady(f"Could not find Generic BT Device with address {address}")
     device = GenericBTDevice(ble_device)
-
-    coordinator = hass.data[DOMAIN][entry.entry_id] = GenericBTCoordinator(hass, _LOGGER, ble_device, device, entry.title, entry.unique_id, True)
+    coordinator = hass.data[DOMAIN][entry.entry_id] = GenericBTCoordinator(
+        hass, _LOGGER, ble_device, device, entry.title, entry.unique_id, True
+    )
     entry.async_on_unload(coordinator.async_start())
 
     if not await coordinator.async_wait_ready():
         raise ConfigEntryNotReady(f"{address} is not advertising state")
 
-    with contextlib.suppress(Exception):
+    # This used to be wrapped in contextlib.suppress(Exception),
+    # which silently discarded any failure
+    try:
         await device.subscribe_to_notify(DEFAULT_NOTIFY_UUID)
         await device.update()
+    except Exception:  # pylint: disable=broad-except
+        _LOGGER.warning(
+            "Failed to subscribe to notifications for %s on UUID %s - "
+            "notification-based sensors will not update until this succeeds",
+            address,
+            DEFAULT_NOTIFY_UUID,
+            exc_info=True,
+        )
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
