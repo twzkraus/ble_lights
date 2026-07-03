@@ -1,4 +1,7 @@
-# generic_bt
-Generic Bluetooth Integration for Home Assistant
+# ble_lights
 
-Please check here: https://community.home-assistant.io/t/generic-bluetooth-integration/648952
+Bluetooth Low Energy Lights Controller Integration for Home Assistant
+
+Forked from https://github.com/fuatakgun/generic_bt
+
+Connects to Adafruit Bluefruit LE SPI Friend lights controllers

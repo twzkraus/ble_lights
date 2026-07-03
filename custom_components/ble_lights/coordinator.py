@@ -65,6 +65,7 @@ class GenericBTCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
 
         self._was_unavailable = False
         self.device.update_from_advertisement(service_info.advertisement)
+        self.hass.async_create_task(self.device.update())
         super()._async_handle_bluetooth_event(service_info, change)
 
     async def async_wait_ready(self) -> bool:

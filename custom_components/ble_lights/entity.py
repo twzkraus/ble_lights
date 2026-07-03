@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Callable
 
 from homeassistant.components.bluetooth.passive_update_coordinator import PassiveBluetoothCoordinatorEntity
 from homeassistant.helpers import device_registry as dr
@@ -26,3 +27,20 @@ class GenericBTEntity(PassiveBluetoothCoordinatorEntity[GenericBTCoordinator]):
             "connections":{(dr.CONNECTION_BLUETOOTH, self._address)},
             "name":coordinator.device_name
         }
+        self._remove_device_listener: Callable[[], None] | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Register for connection-state updates from the device, in addition to coordinator updates."""
+        await super().async_added_to_hass()
+        self._remove_device_listener = self._device.add_listener(self._handle_device_update)
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister the connection-state listener."""
+        if self._remove_device_listener is not None:
+            self._remove_device_listener()
+            self._remove_device_listener = None
+        await super().async_will_remove_from_hass()
+
+    def _handle_device_update(self) -> None:
+        """Called whenever the device's connection state changes, regardless of trigger."""
+        self.async_write_ha_state()

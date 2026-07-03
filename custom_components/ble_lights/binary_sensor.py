@@ -27,6 +27,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     platform = entity_platform.async_get_current_platform()
     platform.async_register_entity_service("write_gatt", Schema.WRITE_GATT.value, "write_gatt")
     platform.async_register_entity_service("read_gatt", Schema.READ_GATT.value, "read_gatt")
+    platform.async_register_entity_service("subscribe_notify", Schema.SUBSCRIBE_NOTIFY.value, "subscribe_notify")
+    platform.async_register_entity_service("unsubscribe_notify", Schema.UNSUBSCRIBE_NOTIFY.value, "unsubscribe_notify")
 
 
 class GenericBTBinarySensor(GenericBTEntity, BinarySensorEntity):
@@ -48,6 +50,15 @@ class GenericBTBinarySensor(GenericBTEntity, BinarySensorEntity):
 
     async def read_gatt(self, target_uuid):
         await self._device.read_gatt(target_uuid)
+        self.async_write_ha_state()
+
+    async def subscribe_notify(self, target_uuid):
+        await self._device.subscribe_to_notify(target_uuid)
+        await self._device.update()
+        self.async_write_ha_state()
+
+    async def unsubscribe_notify(self, target_uuid):
+        await self._device.unsubscribe_from_notify(target_uuid)
         self.async_write_ha_state()
 
 
