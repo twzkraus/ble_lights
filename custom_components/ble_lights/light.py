@@ -110,15 +110,12 @@ def _ascii_command(prefix: int, ascii_payload: str) -> str:
     return f"{prefix:02X}" + ascii_payload.encode("ascii").hex().upper()
 
 
-def _rgb_to_hsl_bytes(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
-    """Convert an 0-255 RGB tuple into single-byte H, S, L values.
+def _rgb_to_hsv_bytes(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Convert an 0-255 RGB tuple into single-byte H, S, V values."""
 
-    ASSUMPTION: H/S/L are each a single byte (0-255). Verify against a
-    real device and adjust if colors come out wrong.
-    """
     r, g, b = (c / 255 for c in rgb)
-    h, l, s = colorsys.rgb_to_hls(r, g, b)
-    return (round(h * 255), round(s * 255), round(l * 255))
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    return (round(h * 255), round(s * 255), round(v * 255))
 
 
 def _encode_colors(colors: list[tuple[int, int, int]]) -> str:
@@ -130,7 +127,7 @@ def _encode_colors(colors: list[tuple[int, int, int]]) -> str:
     """
     payload = f"{CMD_SET_COLORS_PREFIX:02X}"
     for rgb in colors[:NUM_COLOR_SLOTS]:
-        h, s, l = _rgb_to_hsl_bytes(rgb)
+        h, s, l = _rgb_to_hsv_bytes(rgb)
         payload += f"{h:02X}{s:02X}{l:02X}"
     if len(colors) < NUM_COLOR_SLOTS:
         payload += "000000"
