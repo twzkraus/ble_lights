@@ -19,33 +19,8 @@ NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS = 6
 class Schema(Enum):
     """General used service schema definition"""
 
-    WRITE_GATT = make_entity_service_schema(
+    SYNC_STATE = make_entity_service_schema(
         {
-            vol.Required("target_uuid"): cv.string,
-            vol.Required("data"): cv.string
-        }
-    )
-    READ_GATT = make_entity_service_schema(
-        {
-            vol.Required("target_uuid"): cv.string
-        }
-    )
-    SUBSCRIBE_NOTIFY = make_entity_service_schema(
-        {
-            vol.Required("target_uuid"): cv.string
-        }
-    )
-    UNSUBSCRIBE_NOTIFY = make_entity_service_schema(
-        {
-            vol.Required("target_uuid"): cv.string
-        }
-    )
-    # target_uuid defaults to DEFAULT_WRITE_UUID and timeout defaults to the
-    # device's own reassembly timeout if not provided - see
-    # GenericBTStateSensor.async_request_settings.
-    REQUEST_SETTINGS = make_entity_service_schema(
-        {
-            vol.Optional("target_uuid"): cv.string,
             vol.Optional("timeout", default=6.0): vol.Coerce(float),
         }
     )

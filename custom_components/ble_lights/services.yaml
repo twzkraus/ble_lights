@@ -1,65 +1,3 @@
-write_gatt:
-  name: Write Data into Target UUID
-  description: Write Data into Target UUID
-  target:
-    entity:
-      domain: binary_sensor
-      integration: ble_lights
-  fields:
-    target_uuid:
-      name: Target UUID
-      description: Target UUID
-      required: true
-      selector:
-        text:
-    data:
-      name: Data
-      description: Data
-      required: true
-      selector:
-        text:
-read_gatt:
-  name: Read Data from Target UUID
-  description: Read Data from Target UUID
-  target:
-    entity:
-      domain: binary_sensor
-      integration: ble_lights
-  fields:
-    target_uuid:
-      name: Target UUID
-      description: Target UUID
-      required: true
-      selector:
-        text:
-subscribe_notify:
-  name: Subscribe to Notification UUID
-  description: Subscribe to a notify characteristic and keep the latest value in state
-  target:
-    entity:
-      domain: binary_sensor
-      integration: ble_lights
-  fields:
-    target_uuid:
-      name: Target UUID
-      description: Target UUID
-      required: true
-      selector:
-        text:
-unsubscribe_notify:
-  name: Unsubscribe from Notification UUID
-  description: Stop tracking notifications for a notify characteristic
-  target:
-    entity:
-      domain: binary_sensor
-      integration: ble_lights
-  fields:
-    target_uuid:
-      name: Target UUID
-      description: Target UUID
-      required: true
-      selector:
-        text:
 set_colors:
   name: Set colors
   description: >-
@@ -199,20 +137,14 @@ set_direction:
             - Left
             - Center
             - Right
-request_settings:
+
+sync_state:
   name: Request settings
   description: Request the light to send its current settings.
   target:
     entity:
       domain: sensor
       integration: ble_lights
-  fields:
-    target_uuid:
-      name: Target UUID
-      description: Target UUID
-      required: false
-      selector:
-        text:
     timeout:
       name: Timeout
       description: Timeout in seconds to wait for the response.
