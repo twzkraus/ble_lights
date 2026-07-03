@@ -1,6 +1,6 @@
 {
-  "domain": "generic_bt_twzkraus",
-  "name": "Generic Bluetooth",
+  "domain": "ble_lights",
+  "name": "BLE Lights",
   "codeowners": ["@twzkraus"],
   "config_flow": true,
   "dependencies": ["bluetooth_adapters"],

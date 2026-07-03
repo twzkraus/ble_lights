@@ -4,7 +4,7 @@ write_gatt:
   target:
     entity:
       domain: binary_sensor
-      integration: generic_bt_twzkraus
+      integration: ble_lights
   fields:
     target_uuid:
       name: Target UUID
@@ -24,7 +24,7 @@ read_gatt:
   target:
     entity:
       domain: binary_sensor
-      integration: generic_bt_twzkraus
+      integration: ble_lights
   fields:
     target_uuid:
       name: Target UUID
@@ -38,7 +38,7 @@ subscribe_notify:
   target:
     entity:
       domain: binary_sensor
-      integration: generic_bt_twzkraus
+      integration: ble_lights
   fields:
     target_uuid:
       name: Target UUID
@@ -52,7 +52,7 @@ unsubscribe_notify:
   target:
     entity:
       domain: binary_sensor
-      integration: generic_bt_twzkraus
+      integration: ble_lights
   fields:
     target_uuid:
       name: Target UUID
@@ -69,7 +69,7 @@ set_colors:
   target:
     entity:
       domain: light
-      integration: generic_bt_twzkraus
+      integration: ble_lights
   fields:
     color_1:
       name: Color 1
@@ -111,7 +111,7 @@ set_effect:
   target:
     entity:
       domain: light
-      integration: generic_bt_twzkraus
+      integration: ble_lights
   fields:
     effect:
       name: Effect
@@ -148,7 +148,7 @@ set_speed:
   target:
     entity:
       domain: light
-      integration: generic_bt_twzkraus
+      integration: ble_lights
   fields:
     speed:
       name: Speed
@@ -167,7 +167,7 @@ set_brightness:
   target:
     entity:
       domain: light
-      integration: generic_bt_twzkraus
+      integration: ble_lights
   fields:
     brightness:
       name: Brightness
@@ -186,7 +186,7 @@ set_direction:
   target:
     entity:
       domain: light
-      integration: generic_bt_twzkraus
+      integration: ble_lights
   fields:
     direction:
       name: Direction
@@ -205,7 +205,7 @@ request_settings:
   target:
     entity:
       domain: sensor
-      integration: generic_bt_twzkraus
+      integration: ble_lights
   fields:
     target_uuid:
       name: Target UUID

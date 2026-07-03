@@ -27,8 +27,8 @@ class _BleakError(Exception):
 bleak_exc_module.BleakError = _BleakError
 sys.modules.setdefault("bleak.exc", bleak_exc_module)
 
-MODULE_PATH = Path(__file__).resolve().parents[1] / "custom_components" / "generic_bt_twzkraus" / "generic_bt_api" / "device.py"
-SERVICES_PATH = Path(__file__).resolve().parents[1] / "custom_components" / "generic_bt_twzkraus" / "services.yaml"
+MODULE_PATH = Path(__file__).resolve().parents[1] / "custom_components" / "ble_lights" / "generic_bt_api" / "device.py"
+SERVICES_PATH = Path(__file__).resolve().parents[1] / "custom_components" / "ble_lights" / "services.yaml"
 SPEC = importlib.util.spec_from_file_location("generic_bt_device", MODULE_PATH)
 DEVICE_MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
@@ -42,8 +42,8 @@ def test_subscribe_services_target_the_component_integration():
     subscribe_block = services.split("subscribe_notify:", 1)[1].split("unsubscribe_notify:", 1)[0]
     unsubscribe_block = services.split("unsubscribe_notify:", 1)[1]
 
-    assert "integration: generic_bt_twzkraus" in subscribe_block
-    assert "integration: generic_bt_twzkraus" in unsubscribe_block
+    assert "integration: ble_lights" in subscribe_block
+    assert "integration: ble_lights" in unsubscribe_block
 
 
 class FakeClient:

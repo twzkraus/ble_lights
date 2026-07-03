@@ -23,7 +23,7 @@ def _load_device_module():
     module_path = (
         Path(__file__).resolve().parents[1]
         / "custom_components"
-        / "generic_bt_twzkraus"
+        / "ble_lights"
         / "generic_bt_api"
         / "device.py"
     )
