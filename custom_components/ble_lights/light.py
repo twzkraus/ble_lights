@@ -1,7 +1,6 @@
 """Support for Generic BT light."""
 from __future__ import annotations
 
-import colorsys
 import logging
 from typing import Any
 
@@ -10,15 +9,16 @@ import voluptuous as vol
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_EFFECT,
-    ATTR_RGB_COLOR,
     ColorMode,
     LightEntity,
     LightEntityFeature,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
+from bleak.exc import BleakError
 
 from .const import DEFAULT_WRITE_UUID, DOMAIN
 from .coordinator import GenericBTCoordinator
@@ -54,7 +54,7 @@ DIRECTION_CODES: dict[str, int] = dict(DIRECTIONS)
 NUM_COLOR_SLOTS = 6
 VALID_COLOR_COUNTS = (1, 2, 3, 4, 5, 6)
 
-# (name, code, supports_multiple_colors)
+# (name, code)
 EFFECTS: list[tuple[str, str]] = [
     ("Still", "0"),
     ("Blink", "B"),
@@ -78,6 +78,7 @@ EFFECTS: list[tuple[str, str]] = [
     ("Electric Shock", "E"),
 ]
 EFFECT_CODES: dict[str, str] = dict(EFFECTS)
+CODE_TO_EFFECT: dict[str, str] = {code: name for name, code in EFFECTS}
 
 SET_COLORS_SCHEMA = cv.make_entity_service_schema(
     {
@@ -104,21 +105,24 @@ SET_DIRECTION_SCHEMA = cv.make_entity_service_schema(
     {vol.Required("direction"): vol.In([name for name, _code in DIRECTIONS])}
 )
 
+# Attributes decoded from device notifications that belong on the light,
+# as opposed to purely diagnostic fields (timer1/timer2/version/sync_mode)
+# which stay on GenericBTStateSensor only.
+LIGHT_RELEVANT_ATTRS = ("colors", "speed", "direction")
+
 
 def _ascii_command(prefix: int, ascii_payload: str) -> str:
     """Build a hex payload: 1 prefix byte + ascii-encoded payload."""
     return f"{prefix:02X}" + ascii_payload.encode("ascii").hex().upper()
 
 
-def _rgb_to_hsl_bytes(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
-    """Convert an 0-255 RGB tuple into single-byte H, S, L values.
+def _rgb_to_hsv_bytes(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Convert an 0-255 RGB tuple into single-byte H, S, V values."""
+    import colorsys
 
-    ASSUMPTION: H/S/L are each a single byte (0-255). Verify against a
-    real device and adjust if colors come out wrong.
-    """
     r, g, b = (c / 255 for c in rgb)
-    h, l, s = colorsys.rgb_to_hls(r, g, b)
-    return (round(h * 255), round(s * 255), round(l * 255))
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    return (round(h * 255), round(s * 255), round(v * 255))
 
 
 def _encode_colors(colors: list[tuple[int, int, int]]) -> str:
@@ -130,20 +134,15 @@ def _encode_colors(colors: list[tuple[int, int, int]]) -> str:
     """
     payload = f"{CMD_SET_COLORS_PREFIX:02X}"
     for rgb in colors[:NUM_COLOR_SLOTS]:
-        h, s, l = _rgb_to_hsl_bytes(rgb)
-        payload += f"{h:02X}{s:02X}{l:02X}"
+        h, s, v = _rgb_to_hsv_bytes(rgb)
+        payload += f"{h:02X}{s:02X}{v:02X}"
     if len(colors) < NUM_COLOR_SLOTS:
         payload += "000000"
     return payload
 
 
 def _encode_brightness(value: int) -> str:
-    """Encode a brightness level (0-255) into its hex payload.
-
-    Payload is [prefix]brightness[byte_value], where prefix is the
-    length of "brightness" (10 / 0x0A), not counting the prefix byte
-    itself or the trailing value byte.
-    """
+    """Encode a brightness level (0-255) into its hex payload."""
     return _ascii_command(CMD_BRIGHTNESS_PREFIX, ASCII_BRIGHTNESS) + f"{value:02X}"
 
 
@@ -187,12 +186,19 @@ async def async_setup_entry(
     )
 
 
-class GenericBTLight(GenericBTEntity, LightEntity):
-    """Representation of a Generic BT Light."""
+class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
+    """Representation of a Generic BT Light.
+
+    Deliberately a simple toggle + brightness + effect entity. This device
+    supports up to 6 simultaneous colors, which doesn't map onto any core
+    HA color mode (they all assume a single active color) - multi-color
+    palettes are handled via the set_colors service and surfaced as an
+    attribute, not as entity color state. See set_colors / colors attribute.
+    """
 
     _attr_name = None
-    _attr_color_mode = ColorMode.RGB
-    _attr_supported_color_modes = {ColorMode.RGB}
+    _attr_color_mode = ColorMode.BRIGHTNESS
+    _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
     _attr_supported_features = LightEntityFeature.EFFECT
     _attr_effect_list = [name for name, _code in EFFECTS]
 
@@ -200,19 +206,67 @@ class GenericBTLight(GenericBTEntity, LightEntity):
         """Initialize the light."""
         super().__init__(coordinator)
         self._attr_is_on = False
-        self._attr_rgb_color = (255, 255, 255)
         self._attr_effect = EFFECTS[0][0]
         self._attr_brightness = 255
+        self._attr_extra_state_attributes: dict[str, Any] = {}
+        self._device.set_state_callback(self._handle_state_update)
+
+    async def async_added_to_hass(self) -> None:
+        """Restore last known state, then reconcile against live device data."""
+        await super().async_added_to_hass()
+        self._refresh_from_device()
+        if not self._attr_is_on and self._device.last_notification_data is None:
+            restored_state = await self.async_get_last_state()
+            if restored_state is not None and restored_state.state not in (
+                None,
+                "unknown",
+                "unavailable",
+            ):
+                self._attr_is_on = restored_state.state == "on"
+                if restored_state.attributes.get(ATTR_BRIGHTNESS) is not None:
+                    self._attr_brightness = restored_state.attributes[ATTR_BRIGHTNESS]
+                if restored_state.attributes.get(ATTR_EFFECT) is not None:
+                    self._attr_effect = restored_state.attributes[ATTR_EFFECT]
+        self.async_write_ha_state()
+
+    @callback
+    def _handle_state_update(self) -> None:
+        """Refresh entity state when the device pushes a new complete notification.
+
+        This is the same callback GenericBTStateSensor uses, so the light
+        stays truthful about is_on/brightness/effect regardless of whether
+        the change came from this entity, a physical remote, or another app.
+        """
+        self._refresh_from_device()
+        self.async_write_ha_state()
+
+    def _refresh_from_device(self) -> None:
+        data = self._device.last_notification_data
+        if data is None:
+            return
+
+        self._attr_is_on = bool(data.get("is_on"))
+
+        if (brightness := data.get("brightness")) is not None:
+            self._attr_brightness = brightness
+
+        if (program := data.get("program")) is not None:
+            effect_name = CODE_TO_EFFECT.get(program)
+            if effect_name is not None:
+                self._attr_effect = effect_name
+            else:
+                _LOGGER.debug("Unrecognized program code from device: %s", program)
+
+        self._attr_extra_state_attributes = {
+            key: value for key, value in data.items() if key in LIGHT_RELEVANT_ATTRS
+        }
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """Turn the light on, optionally setting color/effect at the same time."""
+        """Turn the light on, optionally setting effect/brightness at the same time."""
         await self._device.write_gatt(
             DEFAULT_WRITE_UUID, _ascii_command(CMD_LIGHTS_ON_PREFIX, ASCII_LIGHTS_ON)
         )
         self._attr_is_on = True
-
-        if ATTR_RGB_COLOR in kwargs:
-            await self.async_set_colors(color_1=kwargs[ATTR_RGB_COLOR])
 
         if ATTR_EFFECT in kwargs:
             await self._async_apply_effect(kwargs[ATTR_EFFECT])
@@ -221,6 +275,7 @@ class GenericBTLight(GenericBTEntity, LightEntity):
             await self._async_apply_brightness(kwargs[ATTR_BRIGHTNESS])
 
         self.async_write_ha_state()
+        await self._async_confirm_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the light off."""
@@ -229,6 +284,7 @@ class GenericBTLight(GenericBTEntity, LightEntity):
         )
         self._attr_is_on = False
         self.async_write_ha_state()
+        await self._async_confirm_state()
 
     async def async_set_colors(self, **kwargs: Any) -> None:
         """Entity service: set 1-6 colors (color_1..color_6)."""
@@ -243,27 +299,24 @@ class GenericBTLight(GenericBTEntity, LightEntity):
             )
 
         await self._device.write_gatt(DEFAULT_WRITE_UUID, _encode_colors(colors))
-        self._attr_rgb_color = colors[0]
-        self.async_write_ha_state()
+        await self._async_confirm_state()
 
     async def async_set_effect(self, effect: str) -> None:
         """Entity service: set the light's effect/program."""
         await self._async_apply_effect(effect)
         self.async_write_ha_state()
+        await self._async_confirm_state()
 
     async def async_set_speed(self, speed: int) -> None:
         """Entity service: set the effect speed (0-255)."""
         await self._device.write_gatt(DEFAULT_WRITE_UUID, _encode_speed(speed))
-        self._attr_extra_state_attributes = {
-            **(self._attr_extra_state_attributes or {}),
-            "speed": speed,
-        }
-        self.async_write_ha_state()
+        await self._async_confirm_state()
 
     async def async_set_brightness(self, brightness: int) -> None:
         """Entity service: set brightness (0-255) directly."""
         await self._async_apply_brightness(brightness)
         self.async_write_ha_state()
+        await self._async_confirm_state()
 
     async def async_set_direction(self, direction: str) -> None:
         """Entity service: set the effect direction (left/center/right)."""
@@ -271,11 +324,30 @@ class GenericBTLight(GenericBTEntity, LightEntity):
         if code is None:
             raise ValueError(f"Unknown direction: {direction}")
         await self._device.write_gatt(DEFAULT_WRITE_UUID, _encode_direction(code))
-        self._attr_extra_state_attributes = {
-            **(self._attr_extra_state_attributes or {}),
-            "direction": direction,
-        }
-        self.async_write_ha_state()
+        await self._async_confirm_state()
+
+    async def _async_confirm_state(self) -> None:
+        """Reconcile optimistic state against the device's actual settings.
+
+        The device doesn't push state changes on its own - update() drives
+        a full subscribe/request/listen/parse round-trip against
+        currentSettings. On success this invokes _handle_state_update via
+        the same callback GenericBTStateSensor uses, which overwrites
+        whatever we set optimistically above with real decoded values. If
+        the round-trip fails, the optimistic state stands as our best
+        guess rather than leaving the entity in a stale/unknown state.
+        """
+        try:
+            await self._device.update()
+        except BleakError:
+            _LOGGER.warning(
+                "%s: could not connect to confirm state after write; showing optimistic state",
+                self.entity_id,
+            )
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.exception(
+                "%s: unexpected error confirming state after write", self.entity_id
+            )
 
     async def _async_apply_brightness(self, brightness: int) -> None:
         """Send a brightness level (0-255) to the light."""
