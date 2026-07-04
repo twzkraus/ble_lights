@@ -28,8 +28,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     platform = entity_platform.async_get_current_platform()
     platform.async_register_entity_service(
-        "request_settings",
-        Schema.REQUEST_SETTINGS.value,
+        "sync_state",
+        Schema.SYNC_STATE.value,
         "async_request_settings",
     )
 
@@ -96,7 +96,7 @@ class GenericBTStateSensor(GenericBTEntity, SensorEntity, RestoreEntity):
             return None
         return {key: value for key, value in data.items() if key != "is_on"}
 
-    async def async_request_settings(self, target_uuid: str | None = None, timeout: float | None = None) -> None:
+    async def async_request_settings(self, timeout: float | None = None) -> None:
         """Entity service handler: manually trigger a requestSettings round-trip.
 
         The response flows through the normal notification pipeline
@@ -104,9 +104,8 @@ class GenericBTStateSensor(GenericBTEntity, SensorEntity, RestoreEntity):
         so there's nothing further to do here beyond kicking it off and
         surfacing a timeout if the device never replies.
         """
-        write_uuid = target_uuid or DEFAULT_WRITE_UUID
         result = await self._device.request_settings(
-            write_uuid,
+            DEFAULT_WRITE_UUID,
             notify_uuid=DEFAULT_NOTIFY_UUID,
             timeout=timeout if timeout is not None else NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
         )
