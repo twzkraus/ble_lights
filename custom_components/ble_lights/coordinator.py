@@ -5,6 +5,11 @@ import asyncio
 import contextlib
 import logging
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .select import GenericBTSelect
+
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth.active_update_coordinator import ActiveBluetoothDataUpdateCoordinator
 from homeassistant.core import CoreState, HomeAssistant, callback
@@ -27,6 +32,7 @@ class GenericBTCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
         self.base_unique_id = base_unique_id
         self._ready_event = asyncio.Event()
         self._was_unavailable = True
+        self.palette_select_entity: GenericBTSelect | None = None
 
     @callback
     def _needs_poll(self, service_info: bluetooth.BluetoothServiceInfoBleak, seconds_since_last_poll: float | None) -> bool:

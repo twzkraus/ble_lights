@@ -249,6 +249,9 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
                 f"Provide 1-6 colors (color_1..color_6), got {len(colors)}"
             )
 
+        if self.coordinator.palette_select_entity is not None:
+            self.coordinator.palette_select_entity.invalidate_palette()
+
         await self._device.set_colors(DEFAULT_WRITE_UUID, colors)
         await self._async_confirm_state()
 
@@ -297,6 +300,9 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
             (c["hue"], c["saturation"], c["value"]) for c in parsed["colors"]
         ]
         await self._device.set_colors_hsv(DEFAULT_WRITE_UUID, hsv_colors)
+        if self.coordinator.palette_select_entity is not None:
+            self.coordinator.palette_select_entity.invalidate_palette()
+
         await self._device.set_effect(DEFAULT_WRITE_UUID, parsed["program_code"])
         await self._device.set_direction(DEFAULT_WRITE_UUID, parsed["direction_code"])
         await self._device.set_speed(DEFAULT_WRITE_UUID, parsed["speed"])
