@@ -145,6 +145,7 @@ sync_state:
     entity:
       domain: sensor
       integration: ble_lights
+  fields:
     timeout:
       name: Timeout
       description: Timeout in seconds to wait for the response.
