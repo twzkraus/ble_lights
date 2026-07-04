@@ -9,7 +9,6 @@ from .coordinator import GenericBTCoordinator
 from .entity import GenericBTEntity
 from .const import COLOR_PALETTES, COLOR_PALETTE_NAMES, DEFAULT_WRITE_UUID, DOMAIN
 
-
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -27,7 +26,7 @@ class GenericBTSelect(GenericBTEntity, SelectEntity):
 
     def __init__(self, coordinator: GenericBTCoordinator) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = coordinator.base_unique_id
+        self._attr_unique_id = f"{coordinator.base_unique_id}_color_palette"
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
