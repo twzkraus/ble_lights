@@ -23,6 +23,7 @@ from bleak.exc import BleakError
 from .const import DEFAULT_WRITE_UUID, DOMAIN
 from .coordinator import GenericBTCoordinator
 from .entity import GenericBTEntity
+from .generic_bt_api.device import SETTINGS_PACKET_LENGTH, parse_settings_packet
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,6 +66,19 @@ EFFECTS: list[tuple[str, str]] = [
 EFFECT_CODES: dict[str, str] = dict(EFFECTS)
 CODE_TO_EFFECT: dict[str, str] = {code: name for name, code in EFFECTS}
 
+def _validate_settings_hex(value: str) -> str:
+    """Validate that value is a hex string decoding to exactly SETTINGS_PACKET_LENGTH bytes."""
+    try:
+        raw_bytes = bytes.fromhex(value)
+    except ValueError as exc:
+        raise vol.Invalid(f"settings must be a valid hex string: {exc}") from exc
+    if len(raw_bytes) != SETTINGS_PACKET_LENGTH:
+        raise vol.Invalid(
+            f"settings must decode to exactly {SETTINGS_PACKET_LENGTH} bytes, "
+            f"got {len(raw_bytes)}"
+        )
+    return value
+
 SET_COLORS_SCHEMA = cv.make_entity_service_schema(
     {
         vol.Optional(f"color_{i}"): vol.All(
@@ -88,6 +102,10 @@ SET_BRIGHTNESS_SCHEMA = cv.make_entity_service_schema(
 
 SET_DIRECTION_SCHEMA = cv.make_entity_service_schema(
     {vol.Required("direction"): vol.In([name for name, _code in DIRECTIONS])}
+)
+
+SET_APPLY_SCENE_SCHEMA = cv.make_entity_service_schema(
+    {vol.Required("settings"): vol.All(cv.string, _validate_settings_hex)}
 )
 
 # Attributes decoded from device notifications that belong on the light,
@@ -117,6 +135,9 @@ async def async_setup_entry(
     )
     platform.async_register_entity_service(
         "set_direction", SET_DIRECTION_SCHEMA, "async_set_direction"
+    )
+    platform.async_register_entity_service(
+        "apply_scene", SET_APPLY_SCENE_SCHEMA, "async_apply_scene"
     )
 
 
@@ -254,6 +275,40 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
         if code is None:
             raise ValueError(f"Unknown direction: {direction}")
         await self._device.set_direction(DEFAULT_WRITE_UUID, code)
+        await self._async_confirm_state()
+
+    async def async_apply_scene(self, settings: str) -> None:
+        """Entity service: take a 40-byte requestSettings hex string (as
+        captured from a currentSettings notification) and push the VISIBLE
+        ASPECTS back to the device: all 6 colors, program, direction, speed,
+        brightness, and on/off state.
+        timer1/timer2, sync_mode, and version are ignored.
+        """
+        raw_bytes = bytes.fromhex(settings)
+
+        parsed = parse_settings_packet(raw_bytes)
+
+        if parsed["is_on"]:
+            await self._device.turn_on(DEFAULT_WRITE_UUID)
+        else:
+            await self._device.turn_off(DEFAULT_WRITE_UUID)
+
+        hsv_colors = [
+            (c["hue"], c["saturation"], c["value"]) for c in parsed["colors"]
+        ]
+        await self._device.set_colors_hsv(DEFAULT_WRITE_UUID, hsv_colors)
+        await self._device.set_effect(DEFAULT_WRITE_UUID, parsed["program_code"])
+        await self._device.set_direction(DEFAULT_WRITE_UUID, parsed["direction_code"])
+        await self._device.set_speed(DEFAULT_WRITE_UUID, parsed["speed"])
+        await self._device.set_brightness(DEFAULT_WRITE_UUID, parsed["brightness"])
+
+        self._attr_is_on = parsed["is_on"]
+        self._attr_brightness = parsed["brightness"]
+        effect_name = CODE_TO_EFFECT.get(parsed["program_code"])
+        if effect_name is not None:
+            self._attr_effect = effect_name
+
+        self.async_write_ha_state()
         await self._async_confirm_state()
 
     async def _async_confirm_state(self) -> None:
