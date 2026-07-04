@@ -23,7 +23,7 @@ from bleak.exc import BleakError
 from .const import DEFAULT_WRITE_UUID, DOMAIN
 from .coordinator import GenericBTCoordinator
 from .entity import GenericBTEntity
-from .generic_bt_api.device import SETTINGS_PACKET_LENGTH, parse_settings_packet
+from .generic_bt_api.device import SETTINGS_PACKET_LENGTH, NUM_COLOR_SLOTS, parse_settings_packet
 
 _LOGGER = logging.getLogger(__name__)
 

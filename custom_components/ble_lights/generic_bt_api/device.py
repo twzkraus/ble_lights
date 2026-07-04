@@ -56,8 +56,6 @@ def _parse_timer(raw: bytes) -> dict:
     }
 
 
-SETTINGS_PACKET_LENGTH = 40
-
 # Mappings for human-readable attributes
 PROGRAM_MAPPING = {
     b"0": "Still",
