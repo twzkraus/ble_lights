@@ -7,9 +7,12 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
+
+from .generic_bt_api.device import GenericBTBleakError, GenericBTTimeoutError
 
 from .const import DEFAULT_NOTIFY_UUID, DEFAULT_WRITE_UUID, DOMAIN, NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS, Schema
 from .coordinator import GenericBTCoordinator
@@ -104,11 +107,22 @@ class GenericBTStateSensor(GenericBTEntity, SensorEntity, RestoreEntity):
         so there's nothing further to do here beyond kicking it off and
         surfacing a timeout if the device never replies.
         """
-        result = await self._device.request_settings(
-            DEFAULT_WRITE_UUID,
-            notify_uuid=DEFAULT_NOTIFY_UUID,
-            timeout=timeout if timeout is not None else NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
-        )
+        try:
+            result = await self._device.request_settings(
+                DEFAULT_WRITE_UUID,
+                notify_uuid=DEFAULT_NOTIFY_UUID,
+                timeout=timeout if timeout is not None else NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
+            )
+        except (GenericBTBleakError, GenericBTTimeoutError) as exc:
+            _LOGGER.warning(
+                "request_settings service call for %s failed to connect: %s",
+                self.entity_id,
+                exc,
+            )
+            raise HomeAssistantError(
+                f"Could not connect to {self.entity_id} to request settings"
+            ) from exc
+
         if result is None:
             _LOGGER.warning(
                 "request_settings service call for %s timed out waiting for a complete response",
