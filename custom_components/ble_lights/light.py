@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 import voluptuous as vol
+from bleak.exc import BleakError
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
@@ -18,16 +19,15 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
-from bleak.exc import BleakError
 
-from .const import DEFAULT_WRITE_UUID, DOMAIN
+from .const import COLOR_PALETTES, COLOR_PALETTE_NAMES, DEFAULT_WRITE_UUID, DOMAIN
 from .coordinator import GenericBTCoordinator
 from .entity import GenericBTEntity
 from .generic_bt_api.device import SETTINGS_PACKET_LENGTH, NUM_COLOR_SLOTS, parse_settings_packet
 
 _LOGGER = logging.getLogger(__name__)
 
-PARALLEL_UPDATES = 0
+PARALLEL_UPDATES = 1
 
 # --- Protocol -----------------------------------------------------------
 
@@ -37,8 +37,6 @@ DIRECTIONS: list[tuple[str, int]] = [
     ("Right", 2),
 ]
 DIRECTION_CODES: dict[str, int] = dict(DIRECTIONS)
-
-VALID_COLOR_COUNTS = (1, 2, 3, 4, 5, 6)
 
 # (name, code)
 EFFECTS: list[tuple[str, str]] = [
@@ -79,29 +77,21 @@ def _validate_settings_hex(value: str) -> str:
         )
     return value
 
-SET_COLORS_SCHEMA = cv.make_entity_service_schema(
+TURN_ON_CUSTOM_SCHEMA = cv.make_entity_service_schema(
     {
-        vol.Optional(f"color_{i}"): vol.All(
-            vol.ExactSequence([cv.byte, cv.byte, cv.byte]), vol.Coerce(tuple)
-        )
-        for i in range(1, NUM_COLOR_SLOTS + 1)
+        vol.Optional("color_palette"): vol.In(COLOR_PALETTE_NAMES),
+        vol.Optional("effect"): vol.In([name for name, _code in EFFECTS]),
+        vol.Optional("brightness"): cv.byte,
+        vol.Optional("speed"): cv.byte,
+        vol.Optional("direction"): vol.In([name for name, _code in DIRECTIONS]),
+        vol.Optional("color_1"): vol.All(vol.ExactSequence([cv.byte, cv.byte, cv.byte]), vol.Coerce(tuple)),
+        vol.Optional("color_2"): vol.All(vol.ExactSequence([cv.byte, cv.byte, cv.byte]), vol.Coerce(tuple)),
+        vol.Optional("color_3"): vol.All(vol.ExactSequence([cv.byte, cv.byte, cv.byte]), vol.Coerce(tuple)),
+        vol.Optional("color_4"): vol.All(vol.ExactSequence([cv.byte, cv.byte, cv.byte]), vol.Coerce(tuple)),
+        vol.Optional("color_5"): vol.All(vol.ExactSequence([cv.byte, cv.byte, cv.byte]), vol.Coerce(tuple)),
+        vol.Optional("color_6"): vol.All(vol.ExactSequence([cv.byte, cv.byte, cv.byte]), vol.Coerce(tuple)),
+
     }
-)
-
-SET_EFFECT_SCHEMA = cv.make_entity_service_schema(
-    {vol.Required("effect"): vol.In([name for name, _code in EFFECTS])}
-)
-
-SET_SPEED_SCHEMA = cv.make_entity_service_schema(
-    {vol.Required("speed"): cv.byte}
-)
-
-SET_BRIGHTNESS_SCHEMA = cv.make_entity_service_schema(
-    {vol.Required("brightness"): cv.byte}
-)
-
-SET_DIRECTION_SCHEMA = cv.make_entity_service_schema(
-    {vol.Required("direction"): vol.In([name for name, _code in DIRECTIONS])}
 )
 
 SET_APPLY_SCENE_SCHEMA = cv.make_entity_service_schema(
@@ -122,19 +112,7 @@ async def async_setup_entry(
 
     platform = entity_platform.async_get_current_platform()
     platform.async_register_entity_service(
-        "set_colors", SET_COLORS_SCHEMA, "async_set_colors"
-    )
-    platform.async_register_entity_service(
-        "set_effect", SET_EFFECT_SCHEMA, "async_set_effect"
-    )
-    platform.async_register_entity_service(
-        "set_speed", SET_SPEED_SCHEMA, "async_set_speed"
-    )
-    platform.async_register_entity_service(
-        "set_brightness", SET_BRIGHTNESS_SCHEMA, "async_set_brightness"
-    )
-    platform.async_register_entity_service(
-        "set_direction", SET_DIRECTION_SCHEMA, "async_set_direction"
+        "turn_on", TURN_ON_CUSTOM_SCHEMA, "async_turn_on_custom"
     )
     platform.async_register_entity_service(
         "apply_scene", SET_APPLY_SCENE_SCHEMA, "async_apply_scene"
@@ -216,6 +194,7 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
             key: value for key, value in data.items() if key in LIGHT_RELEVANT_ATTRS
         }
 
+    # ---------------------------- Built-in Entity Services --------------------------------
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the light on, optionally setting effect/brightness at the same time."""
         await self._device.turn_on(DEFAULT_WRITE_UUID)
@@ -237,47 +216,50 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
         self.async_write_ha_state()
         await self._async_confirm_state()
 
-    async def async_set_colors(self, **kwargs: Any) -> None:
-        """Entity service: set 1-6 colors (color_1..color_6)."""
-        colors = [
-            kwargs[f"color_{i}"]
-            for i in range(1, NUM_COLOR_SLOTS + 1)
-            if f"color_{i}" in kwargs
-        ]
-        if len(colors) not in VALID_COLOR_COUNTS:
-            raise ValueError(
-                f"Provide 1-6 colors (color_1..color_6), got {len(colors)}"
-            )
 
-        if self.coordinator.palette_select_entity is not None:
-            self.coordinator.palette_select_entity.invalidate_palette()
+    # ---------------------------- Custom Services --------------------------------
+    async def async_turn_on_custom(self, **kwargs: Any) -> None:
+        """Turn the light on, optionally setting colors, effect, brightness, speed, and direction at the same time."""
+        await self._device.turn_on(DEFAULT_WRITE_UUID)
+        self._attr_is_on = True
 
-        await self._device.set_colors(DEFAULT_WRITE_UUID, colors)
-        await self._async_confirm_state()
+        # try direction first bc it raises on error
+        if "direction" in kwargs:
+            direction_code = DIRECTION_CODES.get(kwargs["direction"])
+            if direction_code is not None:
+                await self._device.set_direction(DEFAULT_WRITE_UUID, direction_code)
+            else:
+                raise ValueError(f"Unknown direction: {kwargs['direction']}")
 
-    async def async_set_effect(self, effect: str) -> None:
-        """Entity service: set the light's effect/program."""
-        await self._async_apply_effect(effect)
+        # prefer color_palette over plain colors
+        if "color_palette" in kwargs:
+            palette_name = kwargs["color_palette"]
+            if palette_name not in COLOR_PALETTE_NAMES:
+                raise ValueError(f"Unknown color_palette: {palette_name}")
+            colors = COLOR_PALETTES[palette_name]
+            await self._device.set_colors_hsv(DEFAULT_WRITE_UUID, colors)
+            if self.coordinator.palette_select_entity is not None:
+                self.coordinator.palette_select_entity.set_palette_option(palette_name)
+        else:
+            colors = [
+                kwargs[f"color_{i}"]
+                for i in range(1, NUM_COLOR_SLOTS + 1)
+                if f"color_{i}" in kwargs
+            ]
+            await self._device.set_colors(DEFAULT_WRITE_UUID, colors)
+            if self.coordinator.palette_select_entity is not None:
+                self.coordinator.palette_select_entity.invalidate_palette()
+
+        if ATTR_EFFECT in kwargs:
+            await self._async_apply_effect(kwargs[ATTR_EFFECT])
+
+        if ATTR_BRIGHTNESS in kwargs:
+            await self._async_apply_brightness(kwargs[ATTR_BRIGHTNESS])
+
+        if "speed" in kwargs:
+            await self._device.set_speed(DEFAULT_WRITE_UUID, kwargs["speed"])
+
         self.async_write_ha_state()
-        await self._async_confirm_state()
-
-    async def async_set_speed(self, speed: int) -> None:
-        """Entity service: set the effect speed (0-255)."""
-        await self._device.set_speed(DEFAULT_WRITE_UUID, speed)
-        await self._async_confirm_state()
-
-    async def async_set_brightness(self, brightness: int) -> None:
-        """Entity service: set brightness (0-255) directly."""
-        await self._async_apply_brightness(brightness)
-        self.async_write_ha_state()
-        await self._async_confirm_state()
-
-    async def async_set_direction(self, direction: str) -> None:
-        """Entity service: set the effect direction (left/center/right)."""
-        code = DIRECTION_CODES.get(direction)
-        if code is None:
-            raise ValueError(f"Unknown direction: {direction}")
-        await self._device.set_direction(DEFAULT_WRITE_UUID, code)
         await self._async_confirm_state()
 
     async def async_apply_scene(self, settings: str) -> None:
@@ -340,6 +322,7 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
                 "%s: unexpected error confirming state after write", self.entity_id
             )
 
+# ---------------------------- Private Helpers --------------------------------
     async def _async_apply_brightness(self, brightness: int) -> None:
         """Send a brightness level (0-255) to the light."""
         await self._device.set_brightness(DEFAULT_WRITE_UUID, brightness)
