@@ -311,7 +311,7 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
         guess rather than leaving the entity in a stale/unknown state.
         """
         try:
-            await self._device.update()
+            await self._device.request_settings(DEFAULT_WRITE_UUID)
         except BleakError:
             _LOGGER.warning(
                 "%s: could not connect to confirm state after write; showing optimistic state",
