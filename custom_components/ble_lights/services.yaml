@@ -1,60 +1,43 @@
-set_colors:
-  name: Set colors
+turn_on:
+  name: Turn on
   description: >-
-    Set 1-6 colors on the light. Provide as many color_N fields as you have
-    colors (color_1, color_2, ...) — the light will use the given colors and
-    repeat them.
+    Turns on one or more BLE Lights and adjusts their properties, even when they are turned on already.
   target:
     entity:
       domain: light
       integration: ble_lights
   fields:
-    color_1:
-      name: Color 1
-      description: First color.
-      example: "[255, 0, 0]"
+    color_palette:
+      name: Color Palette
+      description: The color palette.
+      example: Cherry Blossom
       selector:
-        color_rgb:
-    color_2:
-      name: Color 2
-      description: Second color.
-      example: "[0, 255, 0]"
-      selector:
-        color_rgb:
-    color_3:
-      name: Color 3
-      description: Third color.
-      example: "[0, 0, 255]"
-      selector:
-        color_rgb:
-    color_4:
-      name: Color 4
-      description: Fourth color.
-      selector:
-        color_rgb:
-    color_5:
-      name: Color 5
-      description: Fifth color.
-      selector:
-        color_rgb:
-    color_6:
-      name: Color 6
-      description: Sixth color.
-      selector:
-        color_rgb:
-
-set_effect:
-  name: Set effect
-  description: Set the light's effect/program.
-  target:
-    entity:
-      domain: light
-      integration: ble_lights
-  fields:
+        select:
+          options:
+            - 4th of July
+            - Candy
+            - Cherry Blossom
+            - Christmas
+            - Confetti
+            - Diamonds
+            - Easter
+            - Fall Green
+            - Fall Red
+            - Five Color
+            - Halloween
+            - Hydrangea
+            - Lindsay
+            - Mardi Gras
+            - Moonlight
+            - Rainbow
+            - Sapphire
+            - St. Patrick's Day
+            - Starry Night
+            - Under the Sea
+            - Valentine's Day
     effect:
       name: Effect
       description: The effect to run.
-      required: true
       example: Chase
       selector:
         select:
@@ -79,57 +62,27 @@ set_effect:
             - Color Pulse
             - Random Placement
             - Electric Shock
-
-set_speed:
-  name: Set speed
-  description: Set the effect speed.
-  target:
-    entity:
-      domain: light
-      integration: ble_lights
-  fields:
-    speed:
-      name: Speed
-      description: Speed value (0-255).
-      required: true
-      example: 128
-      selector:
-        number:
-          min: 0
-          max: 255
-          mode: slider
-
-set_brightness:
-  name: Set brightness
-  description: Set the light's brightness directly.
-  target:
-    entity:
-      domain: light
-      integration: ble_lights
-  fields:
     brightness:
       name: Brightness
       description: Brightness value (0-255).
-      required: true
       example: 200
       selector:
         number:
           min: 0
           max: 255
           mode: slider
-
-set_direction:
-  name: Set direction
-  description: Set the effect direction.
-  target:
-    entity:
-      domain: light
-      integration: ble_lights
-  fields:
+    speed:
+      name: Speed
+      description: Speed value (0-255).
+      example: 128
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: slider
     direction:
       name: Direction
       description: Direction to run the effect.
-      required: true
       example: Center
       selector:
         select:
@@ -137,6 +90,45 @@ set_direction:
             - Left
             - Center
             - Right
+    color_1:
+      name: Color 1
+      description: First color.
+      example: "[255, 0, 0]"
+      selector:
+        color_rgb:
+      advanced: true
+    color_2:
+      name: Color 2
+      description: Second color.
+      example: "[0, 255, 0]"
+      selector:
+        color_rgb:
+      advanced: true
+    color_3:
+      name: Color 3
+      description: Third color.
+      example: "[0, 0, 255]"
+      selector:
+        color_rgb:
+      advanced: true
+    color_4:
+      name: Color 4
+      description: Fourth color.
+      selector:
+        color_rgb:
+      advanced: true
+    color_5:
+      name: Color 5
+      description: Fifth color.
+      selector:
+        color_rgb:
+      advanced: true
+    color_6:
+      name: Color 6
+      description: Sixth color.
+      selector:
+        color_rgb:
+      advanced: true
 
 sync_state:
   name: Request settings
