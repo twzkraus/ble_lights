@@ -16,7 +16,7 @@ from .generic_bt_api.device import GenericBTDevice
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = [Platform.NUMBER, Platform.SWITCH, Platform.SENSOR, Platform.LIGHT]
+PLATFORMS = [Platform.NUMBER, Platform.SWITCH, Platform.SENSOR, Platform.LIGHT, Platform.SELECT]
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Generic BT from a config entry."""
