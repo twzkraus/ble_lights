@@ -36,12 +36,16 @@ class GenericBTSelect(GenericBTEntity, SelectEntity):
         self.coordinator.palette_select_entity = None
         await super().async_will_remove_from_hass()
 
+    def set_palette_option(self, option: str) -> None:
+        """Set the selected palette without sending a command to the device."""
+        self._attr_current_option = option
+        self.async_write_ha_state()
+
     async def async_select_option(self, option: str) -> None:
         colors = COLOR_PALETTES[option]
         await self._device.set_colors_hsv(DEFAULT_WRITE_UUID, colors)
         await self._device.update()
-        self._attr_current_option = option
-        self.async_write_ha_state()
+        self.set_palette_option(option)
 
     def invalidate_palette(self) -> None:
         """Clear the selected palette, e.g. when color is set outside select_option."""
