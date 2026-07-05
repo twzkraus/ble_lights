@@ -233,7 +233,7 @@ def parse_settings_packet(raw_bytes: bytes) -> dict:
         "sync_name": sync_name,
         "direction_code": direction_code,
         "direction_name": direction_name,
-        "raw_byte_array": list(packet),
+        "raw_hex": packet.hex(),
     }
 
 

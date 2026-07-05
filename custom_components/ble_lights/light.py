@@ -101,7 +101,7 @@ SET_APPLY_SCENE_SCHEMA = cv.make_entity_service_schema(
 # Attributes decoded from device notifications that belong on the light,
 # as opposed to purely diagnostic fields (timer1/timer2/version/sync_mode)
 # which stay on GenericBTStateSensor only.
-LIGHT_RELEVANT_ATTRS = ("colors", "speed", "direction")
+LIGHT_RELEVANT_ATTRS = ("colors", "speed", "direction", "raw_hex")
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
