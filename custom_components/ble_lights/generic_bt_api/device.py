@@ -3,6 +3,7 @@
 from uuid import UUID
 from typing import Callable, Optional
 import asyncio
+from datetime import datetime, timedelta
 import logging
 import struct
 from contextlib import AsyncExitStack, suppress
@@ -21,6 +22,17 @@ _LOGGER = logging.getLogger(__name__)
 # Default seconds of inactivity before we auto-disconnect.
 # 0 / None disables idle-disconnect entirely.
 DEFAULT_IDLE_DISCONNECT_SECONDS = 30
+
+# How often we poll the device for its current settings, in the absence of
+# anything else prompting a refresh (a write, or an upcoming device timer -
+# see _schedule_next_poll). Not exposed in the UI - change this constant
+# directly if a different cadence is needed.
+POLL_INTERVAL_SECONDS = 3600
+
+# Small buffer added after a device timer's predicted on/off transition
+# before we poll, so we're asking "what happened" shortly after the
+# transition rather than racing it.
+POLL_TIMER_EVENT_BUFFER_SECONDS = 10
 
 # requestSettings response is a fixed 40-byte binary struct, NOT text.
 # Layout (little-endian, all unsigned bytes unless noted):
@@ -319,6 +331,14 @@ class GenericBTDevice:
         # request_and_wait()/request_settings().
         self._pending_response_futures: list[asyncio.Future] = []
 
+        # Periodic polling bookkeeping (see "--- Polling ---" section below).
+        self._poll_timer_handle: Optional[asyncio.TimerHandle] = None
+        self._poll_write_uuid: Optional[str] = None
+        self._polling_enabled: bool = False
+        # loop.time()-based timestamp of the next scheduled poll, exposed
+        # mainly for diagnostics/tests.
+        self.next_poll_time: Optional[float] = None
+
     def add_listener(self, update_callback: Callable[[], None]) -> Callable[[], None]:
         """Register a callback to be invoked whenever connection state changes.
 
@@ -361,6 +381,7 @@ class GenericBTDevice:
 
     async def stop(self):
         """Called on integration unload/reload - make sure we actually let go of the connection."""
+        self.stop_polling()
         await self.disconnect()
         self._notify_uuid = None
         self._read_uuid = None
@@ -534,6 +555,10 @@ class GenericBTDevice:
         for state_callback in list(self._state_callbacks):
             with suppress(Exception):
                 state_callback()
+        # Fresh state (possibly with updated timer settings) just came in -
+        # recompute when the next poll should happen rather than waiting on
+        # a schedule based on stale timer info.
+        self._schedule_next_poll()
 
     def _decode_data(self, data) -> tuple[Optional[str], Optional[dict]]:
         """Decode a raw GATT payload.
@@ -654,6 +679,11 @@ class GenericBTDevice:
         data_as_bytes = bytearray.fromhex(data)
         await self._client.write_gatt_char(uuid, data_as_bytes, True)
         self._reset_idle_timer()
+        # A write means either a device change was just made, or we're
+        # about to resync via requestSettings - either way, "now" is a good
+        # baseline to count the next poll interval from instead of whatever
+        # was previously scheduled.
+        self._schedule_next_poll()
 
     async def read_gatt(self, target_uuid):
         await self.get_client()
@@ -782,6 +812,139 @@ class GenericBTDevice:
         return await self.request_and_wait(
             write_uuid, REQUEST_SETTINGS_COMMAND_HEX, notify_uuid=notify_uuid, timeout=timeout
         )
+
+    # --- Polling -----------------------------------------------------------
+    # Besides reacting to BLE notifications, we periodically ask the device
+    # for its current settings so Home Assistant's view of state doesn't
+    # silently drift (e.g. someone used the physical remote, or one of the
+    # device's own timers fired). Polling cadence is intentionally not
+    # exposed in the UI - POLL_INTERVAL_SECONDS is the one place to change
+    # it.
+
+    def start_polling(self, write_uuid: str) -> None:
+        """Begin periodic polling of device state via requestSettings.
+
+        Call once - e.g. from async_added_to_hass, after subscribe_to_notify
+        has set up the notification path - with the write UUID to send the
+        requestSettings command to. Safe to call again to change the write
+        UUID; it will simply reschedule from now.
+        """
+        self._poll_write_uuid = write_uuid
+        self._polling_enabled = True
+        asyncio.create_task(self._poll())
+
+    def stop_polling(self) -> None:
+        """Stop periodic polling, e.g. on integration unload."""
+        self._polling_enabled = False
+        self._cancel_poll_timer()
+        self.next_poll_time = None
+
+    def _cancel_poll_timer(self) -> None:
+        if self._poll_timer_handle is not None:
+            self._poll_timer_handle.cancel()
+            self._poll_timer_handle = None
+
+    def _schedule_next_poll(self, override_delay: float | None = None) -> None:
+        """(Re)arm the poll timer.
+
+        By default, fires 30 seconds after the next upcoming hour.
+        But if we know (from the last settings we read) of a timer whose next on/off
+        transition is expected sooner than that, wake up shortly after that instead.
+
+        An optional override_delay can be passed to manually force a poll sooner.
+
+        No-op if polling hasn't been started via start_polling().
+        """
+        if not self._polling_enabled or self._poll_write_uuid is None:
+            return
+        self._cancel_poll_timer()
+
+        # 1. Determine the default delay (30 seconds past the next hour)
+        if override_delay is not None:
+            delay = override_delay
+        else:
+            now = datetime.now()
+            # Calculate top of the next hour
+            next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            # Add the 30-second offset
+            next_poll_target = next_hour + timedelta(seconds=30)
+            delay = (next_poll_target - now).total_seconds()
+
+        # 2. Check if a device timer event happens even sooner
+        next_timer_event = self._seconds_until_next_timer_event()
+        if next_timer_event is not None and next_timer_event < delay:
+            delay = next_timer_event
+
+        # 3. Schedule the poll
+        loop = asyncio.get_event_loop()
+        self.next_poll_time = loop.time() + delay
+        self._poll_timer_handle = loop.call_later(
+            delay, lambda: asyncio.create_task(self._poll())
+        )
+        _LOGGER.debug("Next poll scheduled in %.0fs", delay)
+
+    async def _poll(self) -> None:
+        """Timer-fired poll: refresh state from the device and notify HA."""
+        self._poll_timer_handle = None
+        if not self._polling_enabled or self._poll_write_uuid is None:
+            return
+        _LOGGER.debug("Polling device for current settings")
+        success = False
+        try:
+            await self.request_settings(self._poll_write_uuid)
+            success = True
+        except (GenericBTBleakError, GenericBTTimeoutError):
+            _LOGGER.debug("Poll failed to connect/communicate with device", exc_info=True)
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.debug("Unexpected error while polling", exc_info=True)
+        finally:
+            # Always reschedule, even after a failure/timeout, so a
+            # transient BLE hiccup doesn't permanently stop polling.
+            if success:
+                self._schedule_next_poll()  # Uses the default poll timeline
+            else:
+                _LOGGER.debug("Poll failed; scheduling retry in 5 minutes")
+                self._schedule_next_poll(override_delay=300.0)
+
+    def _seconds_until_next_timer_event(self) -> Optional[float]:
+        """Seconds until the nearest upcoming on/off transition among the
+        device's configured timers, per the last known settings - or None
+        if there's no known/enabled timer to consider.
+
+        Only clock-time transitions (start_hour/start_minute etc.) can be
+        predicted this way; sunrise/sunset-relative timers depend on sun
+        data we don't have here, so those are left to the regular
+        POLL_INTERVAL_SECONDS cadence.
+        """
+        data = self.last_notification_data
+        if not data:
+            return None
+
+        now = datetime.now()
+        candidates: list[float] = []
+
+        for timer_key in ("timer1", "timer2"):
+            timer = data.get(timer_key)
+            if not timer or not timer.get("timer_on_off"):
+                continue
+            for sun_flag_key, hour_key, minute_key in (
+                ("start_sunset", "start_hour", "start_minute"),
+                ("end_sunrise", "end_hour", "end_minute"),
+            ):
+                if timer.get(sun_flag_key):
+                    continue  # sunrise/sunset-relative - can't predict
+                hour, minute = timer.get(hour_key), timer.get(minute_key)
+                if hour is None or minute is None:
+                    continue
+                try:
+                    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                except ValueError:
+                    continue  # garbage hour/minute value from the device
+                if candidate <= now:
+                    candidate += timedelta(days=1)
+                candidates.append((candidate - now).total_seconds() + POLL_TIMER_EVENT_BUFFER_SECONDS)
+
+        return min(candidates) if candidates else None
 
     def update_from_advertisement(self, advertisement):
         pass
