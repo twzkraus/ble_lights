@@ -143,7 +143,7 @@ sync_state:
   description: Request the light to send its current settings.
   target:
     entity:
-      domain: sensor
+      domain: light
       integration: ble_lights
   fields:
     timeout:
@@ -151,3 +151,24 @@ sync_state:
       description: Timeout in seconds to wait for the response.
       required: false
       default: 6
+
+apply_scene:
+  name: Apply scene
+  description: >-
+    Apply the user-visible aspects of a 40-byte requestSettings response
+    back to the light: all 6 colors, program/effect, direction, speed,
+    brightness, and on/off state. Timer schedules, sync mode, and firmware
+    version are not applied.
+  target:
+    entity:
+      domain: light
+      integration: ble_lights
+  fields:
+    settings:
+      name: Settings String
+      description: >-
+        The 40-byte device settings packet as a hex string (80 characters).
+      required: true
+      example: "300a1400ff..."
+      selector:
+        text:

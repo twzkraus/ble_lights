@@ -23,26 +23,13 @@ from bleak.exc import BleakError
 from .const import DEFAULT_WRITE_UUID, DOMAIN
 from .coordinator import GenericBTCoordinator
 from .entity import GenericBTEntity
+from .generic_bt_api.device import SETTINGS_PACKET_LENGTH, NUM_COLOR_SLOTS, parse_settings_packet
 
 _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 0
 
 # --- Protocol -----------------------------------------------------------
-
-CMD_LIGHTS_ON_PREFIX = 0x08
-CMD_LIGHTS_OFF_PREFIX = 0x09
-CMD_PROGRAM_PREFIX = 0x08
-CMD_SET_COLORS_PREFIX = 0x12
-CMD_BRIGHTNESS_PREFIX = 0x0B
-CMD_SPEED_PREFIX = 0x06
-CMD_DIRECTION_PREFIX = 0x0A
-
-ASCII_LIGHTS_ON = "lightsOn"
-ASCII_LIGHTS_OFF = "lightsOff"
-ASCII_BRIGHTNESS = "brightness"
-ASCII_SPEED = "speed"
-ASCII_DIRECTION = "direction"
 
 DIRECTIONS: list[tuple[str, int]] = [
     ("Left", 0),
@@ -51,7 +38,6 @@ DIRECTIONS: list[tuple[str, int]] = [
 ]
 DIRECTION_CODES: dict[str, int] = dict(DIRECTIONS)
 
-NUM_COLOR_SLOTS = 6
 VALID_COLOR_COUNTS = (1, 2, 3, 4, 5, 6)
 
 # (name, code)
@@ -80,6 +66,19 @@ EFFECTS: list[tuple[str, str]] = [
 EFFECT_CODES: dict[str, str] = dict(EFFECTS)
 CODE_TO_EFFECT: dict[str, str] = {code: name for name, code in EFFECTS}
 
+def _validate_settings_hex(value: str) -> str:
+    """Validate that value is a hex string decoding to exactly SETTINGS_PACKET_LENGTH bytes."""
+    try:
+        raw_bytes = bytes.fromhex(value)
+    except ValueError as exc:
+        raise vol.Invalid(f"settings must be a valid hex string: {exc}") from exc
+    if len(raw_bytes) != SETTINGS_PACKET_LENGTH:
+        raise vol.Invalid(
+            f"settings must decode to exactly {SETTINGS_PACKET_LENGTH} bytes, "
+            f"got {len(raw_bytes)}"
+        )
+    return value
+
 SET_COLORS_SCHEMA = cv.make_entity_service_schema(
     {
         vol.Optional(f"color_{i}"): vol.All(
@@ -105,61 +104,14 @@ SET_DIRECTION_SCHEMA = cv.make_entity_service_schema(
     {vol.Required("direction"): vol.In([name for name, _code in DIRECTIONS])}
 )
 
+SET_APPLY_SCENE_SCHEMA = cv.make_entity_service_schema(
+    {vol.Required("settings"): vol.All(cv.string, _validate_settings_hex)}
+)
+
 # Attributes decoded from device notifications that belong on the light,
 # as opposed to purely diagnostic fields (timer1/timer2/version/sync_mode)
 # which stay on GenericBTStateSensor only.
 LIGHT_RELEVANT_ATTRS = ("colors", "speed", "direction")
-
-
-def _ascii_command(prefix: int, ascii_payload: str) -> str:
-    """Build a hex payload: 1 prefix byte + ascii-encoded payload."""
-    return f"{prefix:02X}" + ascii_payload.encode("ascii").hex().upper()
-
-
-def _rgb_to_hsv_bytes(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
-    """Convert an 0-255 RGB tuple into single-byte H, S, V values."""
-    import colorsys
-
-    r, g, b = (c / 255 for c in rgb)
-    h, s, v = colorsys.rgb_to_hsv(r, g, b)
-    return (round(h * 255), round(s * 255), round(v * 255))
-
-
-def _encode_colors(colors: list[tuple[int, int, int]]) -> str:
-    """Encode 1-6 RGB colors into the device's hex payload.
-
-    The device stops reading colors at the first HSV (0, 0, 0) it sees,
-    so we append one explicit "000000" terminator slot after the given
-    colors, unless all 6 slots are already used.
-    """
-    payload = f"{CMD_SET_COLORS_PREFIX:02X}"
-    for rgb in colors[:NUM_COLOR_SLOTS]:
-        h, s, v = _rgb_to_hsv_bytes(rgb)
-        payload += f"{h:02X}{s:02X}{v:02X}"
-    if len(colors) < NUM_COLOR_SLOTS:
-        payload += "000000"
-    return payload
-
-
-def _encode_brightness(value: int) -> str:
-    """Encode a brightness level (0-255) into its hex payload."""
-    return _ascii_command(CMD_BRIGHTNESS_PREFIX, ASCII_BRIGHTNESS) + f"{value:02X}"
-
-
-def _encode_speed(value: int) -> str:
-    """Encode a speed level (0-255) into its hex payload."""
-    return _ascii_command(CMD_SPEED_PREFIX, ASCII_SPEED) + f"{value:02X}"
-
-
-def _encode_direction(code: int) -> str:
-    """Encode a direction (0=left, 1=center, 2=right) into its hex payload."""
-    return _ascii_command(CMD_DIRECTION_PREFIX, ASCII_DIRECTION) + f"{code:02X}"
-
-
-def _encode_effect(code: str) -> str:
-    """Encode an effect/program selection into its hex payload."""
-    return _ascii_command(CMD_PROGRAM_PREFIX, f"program{code}")
-
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
@@ -183,6 +135,9 @@ async def async_setup_entry(
     )
     platform.async_register_entity_service(
         "set_direction", SET_DIRECTION_SCHEMA, "async_set_direction"
+    )
+    platform.async_register_entity_service(
+        "apply_scene", SET_APPLY_SCENE_SCHEMA, "async_apply_scene"
     )
 
 
@@ -263,9 +218,7 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Turn the light on, optionally setting effect/brightness at the same time."""
-        await self._device.write_gatt(
-            DEFAULT_WRITE_UUID, _ascii_command(CMD_LIGHTS_ON_PREFIX, ASCII_LIGHTS_ON)
-        )
+        await self._device.turn_on(DEFAULT_WRITE_UUID)
         self._attr_is_on = True
 
         if ATTR_EFFECT in kwargs:
@@ -279,9 +232,7 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the light off."""
-        await self._device.write_gatt(
-            DEFAULT_WRITE_UUID, _ascii_command(CMD_LIGHTS_OFF_PREFIX, ASCII_LIGHTS_OFF)
-        )
+        await self._device.turn_off(DEFAULT_WRITE_UUID)
         self._attr_is_on = False
         self.async_write_ha_state()
         await self._async_confirm_state()
@@ -298,7 +249,7 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
                 f"Provide 1-6 colors (color_1..color_6), got {len(colors)}"
             )
 
-        await self._device.write_gatt(DEFAULT_WRITE_UUID, _encode_colors(colors))
+        await self._device.set_colors(DEFAULT_WRITE_UUID, colors)
         await self._async_confirm_state()
 
     async def async_set_effect(self, effect: str) -> None:
@@ -309,7 +260,7 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
 
     async def async_set_speed(self, speed: int) -> None:
         """Entity service: set the effect speed (0-255)."""
-        await self._device.write_gatt(DEFAULT_WRITE_UUID, _encode_speed(speed))
+        await self._device.set_speed(DEFAULT_WRITE_UUID, speed)
         await self._async_confirm_state()
 
     async def async_set_brightness(self, brightness: int) -> None:
@@ -323,7 +274,41 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
         code = DIRECTION_CODES.get(direction)
         if code is None:
             raise ValueError(f"Unknown direction: {direction}")
-        await self._device.write_gatt(DEFAULT_WRITE_UUID, _encode_direction(code))
+        await self._device.set_direction(DEFAULT_WRITE_UUID, code)
+        await self._async_confirm_state()
+
+    async def async_apply_scene(self, settings: str) -> None:
+        """Entity service: take a 40-byte requestSettings hex string (as
+        captured from a currentSettings notification) and push the VISIBLE
+        ASPECTS back to the device: all 6 colors, program, direction, speed,
+        brightness, and on/off state.
+        timer1/timer2, sync_mode, and version are ignored.
+        """
+        raw_bytes = bytes.fromhex(settings)
+
+        parsed = parse_settings_packet(raw_bytes)
+
+        if parsed["is_on"]:
+            await self._device.turn_on(DEFAULT_WRITE_UUID)
+        else:
+            await self._device.turn_off(DEFAULT_WRITE_UUID)
+
+        hsv_colors = [
+            (c["hue"], c["saturation"], c["value"]) for c in parsed["colors"]
+        ]
+        await self._device.set_colors_hsv(DEFAULT_WRITE_UUID, hsv_colors)
+        await self._device.set_effect(DEFAULT_WRITE_UUID, parsed["program_code"])
+        await self._device.set_direction(DEFAULT_WRITE_UUID, parsed["direction_code"])
+        await self._device.set_speed(DEFAULT_WRITE_UUID, parsed["speed"])
+        await self._device.set_brightness(DEFAULT_WRITE_UUID, parsed["brightness"])
+
+        self._attr_is_on = parsed["is_on"]
+        self._attr_brightness = parsed["brightness"]
+        effect_name = CODE_TO_EFFECT.get(parsed["program_code"])
+        if effect_name is not None:
+            self._attr_effect = effect_name
+
+        self.async_write_ha_state()
         await self._async_confirm_state()
 
     async def _async_confirm_state(self) -> None:
@@ -351,9 +336,7 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
 
     async def _async_apply_brightness(self, brightness: int) -> None:
         """Send a brightness level (0-255) to the light."""
-        await self._device.write_gatt(
-            DEFAULT_WRITE_UUID, _encode_brightness(brightness)
-        )
+        await self._device.set_brightness(DEFAULT_WRITE_UUID, brightness)
         self._attr_brightness = brightness
 
     async def _async_apply_effect(self, effect: str) -> None:
@@ -361,5 +344,5 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
         code = EFFECT_CODES.get(effect)
         if code is None:
             raise ValueError(f"Unknown effect: {effect}")
-        await self._device.write_gatt(DEFAULT_WRITE_UUID, _encode_effect(code))
+        await self._device.set_effect(DEFAULT_WRITE_UUID, code)
         self._attr_effect = effect

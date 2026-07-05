@@ -56,8 +56,6 @@ def _parse_timer(raw: bytes) -> dict:
     }
 
 
-SETTINGS_PACKET_LENGTH = 40
-
 # Mappings for human-readable attributes
 PROGRAM_MAPPING = {
     b"0": "Still",
@@ -93,6 +91,81 @@ SYNC_MODE_MAPPING = {
     1: "Master",
     2: "Slave"
 }
+
+# --- Low-level write protocol -------------------------------------------
+# Mirrors the read-side layout above: a prefix byte (device's internal
+# command id) + an ASCII command name + argument bytes. Centralized here
+# so every consumer - light.py, apply_scene_packet, future entities -
+# goes through the same encoding instead of each building hex itself.
+
+CMD_LIGHTS_ON_PREFIX = 0x08
+CMD_LIGHTS_OFF_PREFIX = 0x09
+CMD_PROGRAM_PREFIX = 0x08
+CMD_SET_COLORS_PREFIX = 0x12
+CMD_BRIGHTNESS_PREFIX = 0x0B
+CMD_SPEED_PREFIX = 0x06
+CMD_DIRECTION_PREFIX = 0x0A
+
+ASCII_LIGHTS_ON = "lightsOn"
+ASCII_LIGHTS_OFF = "lightsOff"
+ASCII_BRIGHTNESS = "brightness"
+ASCII_SPEED = "speed"
+ASCII_DIRECTION = "direction"
+
+NUM_COLOR_SLOTS = 6
+
+
+def _ascii_command(prefix: int, ascii_payload: str) -> str:
+    """Build a hex payload: 1 prefix byte + ascii-encoded payload."""
+    return f"{prefix:02X}" + ascii_payload.encode("ascii").hex().upper()
+
+
+def _encode_colors_hsv(hsv_colors: list[tuple[int, int, int]]) -> str:
+    """Encode 1-6 native (H, S, V) byte triples into the device's hex payload.
+
+    Unlike _encode_colors (RGB, UI-facing) this takes bytes already in the
+    device's own HSV space - e.g. straight out of parse_settings_packet -
+    with no color-space conversion.
+    """
+    if not 1 <= len(hsv_colors) <= NUM_COLOR_SLOTS:
+        raise ValueError(f"Provide 1-{NUM_COLOR_SLOTS} colors, got {len(hsv_colors)}")
+    payload = f"{CMD_SET_COLORS_PREFIX:02X}"
+    for h, s, v in hsv_colors[:NUM_COLOR_SLOTS]:
+        payload += f"{h:02X}{s:02X}{v:02X}"
+    # Device stops reading colors at the first (0, 0, 0) HSV it sees.
+    if len(hsv_colors) < NUM_COLOR_SLOTS:
+        payload += "000000"
+    return payload
+
+
+def _rgb_to_hsv_bytes(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Convert an 0-255 RGB tuple into single-byte H, S, V values."""
+    import colorsys
+
+    r, g, b = (c / 255 for c in rgb)
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    return (round(h * 255), round(s * 255), round(v * 255))
+
+
+def _encode_colors(colors: list[tuple[int, int, int]]) -> str:
+    """Encode 1-6 RGB colors (UI-facing) into the device's hex payload."""
+    return _encode_colors_hsv([_rgb_to_hsv_bytes(rgb) for rgb in colors])
+
+
+def _encode_brightness(value: int) -> str:
+    return _ascii_command(CMD_BRIGHTNESS_PREFIX, ASCII_BRIGHTNESS) + f"{value:02X}"
+
+
+def _encode_speed(value: int) -> str:
+    return _ascii_command(CMD_SPEED_PREFIX, ASCII_SPEED) + f"{value:02X}"
+
+
+def _encode_direction(code: int) -> str:
+    return _ascii_command(CMD_DIRECTION_PREFIX, ASCII_DIRECTION) + f"{code:02X}"
+
+
+def _encode_effect(code: str) -> str:
+    return _ascii_command(CMD_PROGRAM_PREFIX, f"program{code}")
 
 def parse_settings_packet(raw_bytes: bytes) -> dict:
     """Parse the 40-byte requestSettings response into structured fields."""
@@ -556,6 +629,35 @@ class GenericBTDevice:
     def _to_uuid(self, target_uuid):
         uuid_str = "{" + target_uuid + "}"
         return UUID(uuid_str)
+
+    # --- High-level device operations ------------------------------------
+
+    async def turn_on(self, write_uuid: str) -> None:
+        await self.write_gatt(write_uuid, _ascii_command(CMD_LIGHTS_ON_PREFIX, ASCII_LIGHTS_ON))
+
+    async def turn_off(self, write_uuid: str) -> None:
+        await self.write_gatt(write_uuid, _ascii_command(CMD_LIGHTS_OFF_PREFIX, ASCII_LIGHTS_OFF))
+
+    async def set_colors(self, write_uuid: str, colors: list[tuple[int, int, int]]) -> None:
+        """Set 1-6 colors given as 0-255 RGB tuples."""
+        await self.write_gatt(write_uuid, _encode_colors(colors))
+
+    async def set_colors_hsv(self, write_uuid: str, hsv_colors: list[tuple[int, int, int]]) -> None:
+        """Set 1-6 colors given as native device (H, S, V) byte triples."""
+        await self.write_gatt(write_uuid, _encode_colors_hsv(hsv_colors))
+
+    async def set_effect(self, write_uuid: str, program_code: str) -> None:
+        """Set the effect/program using its single-character code (see PROGRAM_MAPPING)."""
+        await self.write_gatt(write_uuid, _encode_effect(program_code))
+
+    async def set_speed(self, write_uuid: str, value: int) -> None:
+        await self.write_gatt(write_uuid, _encode_speed(value))
+
+    async def set_brightness(self, write_uuid: str, value: int) -> None:
+        await self.write_gatt(write_uuid, _encode_brightness(value))
+
+    async def set_direction(self, write_uuid: str, code: int) -> None:
+        await self.write_gatt(write_uuid, _encode_direction(code))
 
     async def subscribe_to_notify(self, target_uuid, callback=None):
         """Set the desired notify subscription and ensure it's active.
