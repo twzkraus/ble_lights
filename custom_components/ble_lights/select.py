@@ -39,7 +39,7 @@ class GenericBTSelect(GenericBTEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         colors = COLOR_PALETTES[option]
         await self._device.set_colors_hsv(DEFAULT_WRITE_UUID, colors)
-        await self._async_confirm_state()
+        await self._device.update()
         self._attr_current_option = option
         self.async_write_ha_state()
 
