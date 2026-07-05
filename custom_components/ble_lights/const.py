@@ -6,6 +6,7 @@ from homeassistant.helpers.config_validation import make_entity_service_schema
 import homeassistant.helpers.config_validation as cv
 
 DOMAIN = "ble_lights"
+NUM_COLOR_SLOTS = 6
 DEVICE_STARTUP_TIMEOUT_SECONDS = 30
 DEFAULT_NOTIFY_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
 DEFAULT_WRITE_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"

@@ -6,7 +6,7 @@ import asyncio
 import logging
 import struct
 from contextlib import AsyncExitStack, suppress
-from ..const import NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS
+from ..const import NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS, NUM_COLOR_SLOTS
 
 from bleak import BleakClient
 from bleak.exc import BleakError
@@ -111,8 +111,6 @@ ASCII_LIGHTS_OFF = "lightsOff"
 ASCII_BRIGHTNESS = "brightness"
 ASCII_SPEED = "speed"
 ASCII_DIRECTION = "direction"
-
-NUM_COLOR_SLOTS = 6
 
 
 def _ascii_command(prefix: int, ascii_payload: str) -> str:
