@@ -41,7 +41,7 @@ COLOR_PALETTES: dict[str, [[int]]] = {
     "Valentine's Day": [[238, 175, 255], [253, 48, 255], [242, 255, 255], [252, 255, 255], [222, 155, 255], [0, 255, 115]],
 }
 
-COLOR_PALETTE_NAMES = COLOR_PALETTES.keys()
+COLOR_PALETTE_NAMES = list(COLOR_PALETTES.keys())
 
 class Schema(Enum):
     """General used service schema definition"""
