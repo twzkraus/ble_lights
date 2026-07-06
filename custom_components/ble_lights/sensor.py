@@ -102,32 +102,26 @@ class GenericBTStateSensor(GenericBTEntity, SensorEntity, RestoreEntity):
     async def async_request_settings(self, timeout: float | None = None) -> None:
         """Entity service handler: manually trigger a requestSettings round-trip.
 
-        The response flows through the normal notification pipeline
-        (device callback -> _handle_state_update -> async_write_ha_state),
-        so there's nothing further to do here beyond kicking it off and
-        surfacing a timeout if the device never replies.
+        async_refresh_settings() stores the result and publishes it through
+        the normal state-callback pipeline before returning, so there's
+        nothing further to do here beyond kicking it off and surfacing a
+        failure if the device never replies.
         """
         try:
-            result = await self._device.request_settings(
+            await self._device.async_refresh_settings(
                 DEFAULT_WRITE_UUID,
                 notify_uuid=DEFAULT_NOTIFY_UUID,
                 timeout=timeout if timeout is not None else NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
             )
         except (GenericBTBleakError, GenericBTTimeoutError) as exc:
             _LOGGER.warning(
-                "request_settings service call for %s failed to connect: %s",
+                "sync_state service call for %s failed: %s",
                 self.entity_id,
                 exc,
             )
             raise HomeAssistantError(
-                f"Could not connect to {self.entity_id} to request settings"
+                f"Could not sync settings for {self.entity_id}"
             ) from exc
-
-        if result is None:
-            _LOGGER.warning(
-                "request_settings service call for %s timed out waiting for a complete response",
-                self.entity_id,
-            )
 
 
 class GenericBTPreviousStateSensor(GenericBTStateSensor):

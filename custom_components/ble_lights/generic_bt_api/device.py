@@ -367,6 +367,31 @@ class GenericBTDevice:
         """Return the parsed fields of the previous distinct notification, if any."""
         return self._previous_notification_data
 
+    async def async_refresh_settings(
+        self,
+        write_uuid: str,
+        notify_uuid: Optional[str] = None,
+        timeout: float = NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
+    ) -> dict:
+        """Connect, request settings, and guarantee the result is stored + published.
+
+        This is the one entry point periodic polling and the sync_state
+        entity service should both call. request_and_wait() already
+        stores/publishes as a side effect of the reassembled notification
+        (via _update_notification_value), but callers previously had no way
+        to tell whether that side effect actually happened - they just got
+        back a dict or None and moved on. This raises instead of returning
+        None on timeout, so failures are visible instead of silent.
+        """
+        parsed = await self.request_and_wait(
+            write_uuid, REQUEST_SETTINGS_COMMAND_HEX, notify_uuid=notify_uuid, timeout=timeout
+        )
+        if parsed is None:
+            raise GenericBTTimeoutError(
+                f"No complete response to requestSettings within {timeout}s"
+            )
+        return parsed
+
     async def update(self):
         if self._read_uuid is None:
             return
@@ -544,10 +569,19 @@ class GenericBTDevice:
         return _remove
 
     def _update_notification_value(self, message: Optional[str], parsed: Optional[dict] = None) -> None:
-        if message is None or self.last_notification_value == message:
+        """Record the latest decoded reading and always publish it.
+
+        Distinct-value bookkeeping (previous_notification_value/data) only
+        shifts when the value actually differs, but state callbacks fire on
+        every call - a caller doing a manual resync or routine poll needs a
+        guaranteed state write as confirmation, even when the reading is
+        unchanged from before.
+        """
+        if message is None:
             return
-        self._previous_notification_value = self.last_notification_value
-        self._previous_notification_data = self.last_notification_data
+        if self.last_notification_value != message:
+            self._previous_notification_value = self.last_notification_value
+            self._previous_notification_data = self.last_notification_data
         self.last_notification_value = message
         self.last_notification_data = parsed
         if self._notification_callback is not None:
@@ -555,9 +589,6 @@ class GenericBTDevice:
         for state_callback in list(self._state_callbacks):
             with suppress(Exception):
                 state_callback()
-        # Fresh state (possibly with updated timer settings) just came in -
-        # recompute when the next poll should happen rather than waiting on
-        # a schedule based on stale timer info.
         self._schedule_next_poll()
 
     def _decode_data(self, data) -> tuple[Optional[str], Optional[dict]]:
@@ -891,7 +922,7 @@ class GenericBTDevice:
         _LOGGER.debug("Polling device for current settings")
         success = False
         try:
-            await self.request_settings(self._poll_write_uuid)
+            await self.async_refresh_settings(self._poll_write_uuid)
             success = True
         except (GenericBTBleakError, GenericBTTimeoutError):
             _LOGGER.debug("Poll failed to connect/communicate with device", exc_info=True)
@@ -901,7 +932,7 @@ class GenericBTDevice:
             # Always reschedule, even after a failure/timeout, so a
             # transient BLE hiccup doesn't permanently stop polling.
             if success:
-                self._schedule_next_poll()  # Uses the default poll timeline
+                self._schedule_next_poll()
             else:
                 _LOGGER.debug("Poll failed; scheduling retry in 5 minutes")
                 self._schedule_next_poll(override_delay=300.0)
