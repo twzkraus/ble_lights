@@ -44,7 +44,7 @@ class GenericBTSelect(GenericBTEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         colors = COLOR_PALETTES[option]
         await self._device.set_colors_hsv(DEFAULT_WRITE_UUID, colors)
-        await self._device.update()
+        await self._device.request_settings(DEFAULT_WRITE_UUID)
         self.set_palette_option(option)
 
     def invalidate_palette(self) -> None:

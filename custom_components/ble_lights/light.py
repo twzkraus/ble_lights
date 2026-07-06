@@ -246,9 +246,10 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
                 for i in range(1, NUM_COLOR_SLOTS + 1)
                 if f"color_{i}" in kwargs
             ]
-            await self._device.set_colors(DEFAULT_WRITE_UUID, colors)
-            if self.coordinator.palette_select_entity is not None:
-                self.coordinator.palette_select_entity.invalidate_palette()
+            if len(colors) >= 1:
+                await self._device.set_colors(DEFAULT_WRITE_UUID, colors)
+                if self.coordinator.palette_select_entity is not None:
+                    self.coordinator.palette_select_entity.invalidate_palette()
 
         if ATTR_EFFECT in kwargs:
             await self._async_apply_effect(kwargs[ATTR_EFFECT])
@@ -311,7 +312,7 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
         guess rather than leaving the entity in a stale/unknown state.
         """
         try:
-            await self._device.update()
+            await self._device.request_settings(DEFAULT_WRITE_UUID)
         except BleakError:
             _LOGGER.warning(
                 "%s: could not connect to confirm state after write; showing optimistic state",
