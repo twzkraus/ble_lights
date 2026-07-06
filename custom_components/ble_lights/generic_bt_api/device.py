@@ -174,10 +174,43 @@ def parse_settings_packet(raw_bytes: bytes) -> dict:
             f"Expected at least {SETTINGS_PACKET_LENGTH} bytes, got {len(raw_bytes)}: {raw_bytes.hex()}"
         )
 
-    # Slice exactly the first 40 bytes to ensure consistency in the output array
+    # Slice exactly the first 40 bytes to ensure consistency
     packet = raw_bytes[:SETTINGS_PACKET_LENGTH]
 
-    # 1. Program (Parsed as a 1-byte ASCII character string)
+    # --- SWAPPED PACKET CORRECTION ---
+    # Heuristic: Check if the metadata fields at the end contain plausible values.
+    # If chunks are swapped (bytes 20-39 arrive first), byte 37 & 38 will hold
+    # Color 6 data, which often violates the strict enum mappings.
+
+    test_sync = packet[37]
+    test_direction = packet[38]
+    test_version = packet[36]
+
+    # Define known valid boundaries
+    VALID_SYNC_CODES = set(SYNC_MODE_MAPPING.keys())
+    VALID_DIRECTION_CODES = set(DIRECTION_MAPPING.keys())
+    MAX_EXPECTED_VERSION = 50
+
+    is_sync_invalid = test_sync not in VALID_SYNC_CODES
+    is_direction_invalid = test_direction not in VALID_DIRECTION_CODES
+    is_version_implausible = test_version > MAX_EXPECTED_VERSION
+
+    # If trailing indicators fail, check if the actual start of the packet moved to index 20
+    if is_sync_invalid or is_direction_invalid or is_version_implausible:
+        alternative_program_byte = packet[20:21]
+        if alternative_program_byte in PROGRAM_MAPPING:
+            # Auto-correct: Reassemble the packet by putting the second half first
+            packet = packet[20:] + packet[:20]
+        else:
+            # If it's not shifted neatly to index 20, it's genuinely corrupt
+            raise ValueError(
+                f"Malformatted packet detected. Trailing metadata is out of bounds and "
+                f"no valid program byte found at index 20: sync={test_sync}, "
+                f"direction={test_direction}, version={test_version}."
+            )
+    # ---------------------------------
+
+    # 1. Program
     program_byte = packet[0:1]
     program_code = program_byte.decode('ascii', errors='replace')
     program_name = PROGRAM_MAPPING.get(program_byte, "Unknown")
@@ -214,10 +247,7 @@ def parse_settings_packet(raw_bytes: bytes) -> dict:
 
     direction_code = packet[offset]
     direction_name = DIRECTION_MAPPING.get(direction_code, "Unknown")
-    offset += 1 # offset becomes 39 here
-
-    # Note: packet[39] is the 40th byte. It is left unparsed based on the schema,
-    # but it is safely preserved inside the 'raw_byte_array' below.
+    offset += 1
 
     return {
         "program_code": program_code,
