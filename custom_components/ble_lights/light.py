@@ -220,45 +220,74 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
     # ---------------------------- Custom Services --------------------------------
     async def async_turn_on_custom(self, **kwargs: Any) -> None:
         """Turn the light on, optionally setting colors, effect, brightness, speed, and direction at the same time."""
-        await self._device.turn_on(DEFAULT_WRITE_UUID)
-        self._attr_is_on = True
+        was_on = self._attr_is_on
 
-        # try direction first bc it raises on error
+        # --- Validate everything up front, before touching the device at all ---
+        direction_code = None
         if "direction" in kwargs:
             direction_code = DIRECTION_CODES.get(kwargs["direction"])
-            if direction_code is not None:
-                await self._device.set_direction(DEFAULT_WRITE_UUID, direction_code)
-            else:
+            if direction_code is None:
                 raise ValueError(f"Unknown direction: {kwargs['direction']}")
 
-        # prefer color_palette over plain colors
+        palette_name = None
+        colors = None
         if "color_palette" in kwargs:
             palette_name = kwargs["color_palette"]
             if palette_name not in COLOR_PALETTE_NAMES:
                 raise ValueError(f"Unknown color_palette: {palette_name}")
             colors = COLOR_PALETTES[palette_name]
-            await self._device.set_colors_hsv(DEFAULT_WRITE_UUID, colors)
-            if self.coordinator.palette_select_entity is not None:
-                self.coordinator.palette_select_entity.set_palette_option(palette_name)
         else:
-            colors = [
+            plain_colors = [
                 kwargs[f"color_{i}"]
                 for i in range(1, NUM_COLOR_SLOTS + 1)
                 if f"color_{i}" in kwargs
             ]
-            if len(colors) >= 1:
+            if plain_colors:
+                colors = plain_colors
+
+        effect = kwargs.get(ATTR_EFFECT)
+        brightness = kwargs.get(ATTR_BRIGHTNESS)
+        speed = kwargs.get("speed")
+
+        num_changes = sum(
+            x is not None for x in (direction_code, colors, effect, brightness, speed)
+        )
+
+        # If it's already on and we're changing a lot at once, cut the lights,
+        # apply everything in the dark, and bring it back up clean.
+        should_cycle_off = was_on and num_changes >= 3
+        if should_cycle_off:
+            await self._device.turn_off(DEFAULT_WRITE_UUID)
+            self._attr_is_on = False
+            self.async_write_ha_state()
+
+        # -- Apply settings --
+        if direction_code is not None:
+            await self._device.set_direction(DEFAULT_WRITE_UUID, direction_code)
+
+        if colors is not None:
+            if palette_name is not None:
+                await self._device.set_colors_hsv(DEFAULT_WRITE_UUID, colors)
+                if self.coordinator.palette_select_entity is not None:
+                    self.coordinator.palette_select_entity.set_palette_option(palette_name)
+            else:
                 await self._device.set_colors(DEFAULT_WRITE_UUID, colors)
                 if self.coordinator.palette_select_entity is not None:
                     self.coordinator.palette_select_entity.invalidate_palette()
 
-        if ATTR_EFFECT in kwargs:
-            await self._async_apply_effect(kwargs[ATTR_EFFECT])
+        if effect is not None:
+            await self._async_apply_effect(effect)
 
-        if ATTR_BRIGHTNESS in kwargs:
-            await self._async_apply_brightness(kwargs[ATTR_BRIGHTNESS])
+        if brightness is not None:
+            await self._async_apply_brightness(brightness)
 
-        if "speed" in kwargs:
-            await self._device.set_speed(DEFAULT_WRITE_UUID, kwargs["speed"])
+        if speed is not None:
+            await self._device.set_speed(DEFAULT_WRITE_UUID, speed)
+
+        # Only send turn_on if the light was actually off or we turned it off
+        if not was_on or should_cycle_off:
+            await self._device.turn_on(DEFAULT_WRITE_UUID)
+            self._attr_is_on = True
 
         self.async_write_ha_state()
         await self._async_confirm_state()
