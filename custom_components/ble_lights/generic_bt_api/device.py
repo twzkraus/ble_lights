@@ -177,7 +177,7 @@ def parse_settings_packet(raw_bytes: bytes) -> dict:
     # Slice exactly the first 40 bytes to ensure consistency
     packet = raw_bytes[:SETTINGS_PACKET_LENGTH]
 
-    # --- SWAPPED PACKET VALIDATION ---
+    # --- SWAPPED PACKET CORRECTION ---
     # Heuristic: Check if the metadata fields at the end contain plausible values.
     # If chunks are swapped (bytes 20-39 arrive first), byte 37 & 38 will hold
     # Color 6 data, which often violates the strict enum mappings.
@@ -186,8 +186,7 @@ def parse_settings_packet(raw_bytes: bytes) -> dict:
     test_direction = packet[38]
     test_version = packet[36]
 
-    # Define your known valid boundaries here
-    # (Adjust these sets/ranges based on your actual firmware definitions)
+    # Define known valid boundaries
     VALID_SYNC_CODES = set(SYNC_MODE_MAPPING.keys())
     VALID_DIRECTION_CODES = set(DIRECTION_MAPPING.keys())
     MAX_EXPECTED_VERSION = 50
@@ -196,20 +195,18 @@ def parse_settings_packet(raw_bytes: bytes) -> dict:
     is_direction_invalid = test_direction not in VALID_DIRECTION_CODES
     is_version_implausible = test_version > MAX_EXPECTED_VERSION
 
-    # If multiple trailing indicators fail, we are almost certainly dealing with swapped chunks
+    # If trailing indicators fail, check if the actual start of the packet moved to index 20
     if is_sync_invalid or is_direction_invalid or is_version_implausible:
-        # Optional: Test if the *actual* start of the packet moved to index 20
         alternative_program_byte = packet[20:21]
         if alternative_program_byte in PROGRAM_MAPPING:
-            raise ValueError(
-                f"Malformatted packet detected. Sub-packets appear to be swapped or misaligned. "
-                f"Byte 37 ({test_sync}) or 38 ({test_direction}) is invalid. "
-                f"Found valid program start byte {alternative_program_byte.hex()} at index 20 instead."
-            )
+            # Auto-correct: Reassemble the packet by putting the second half first
+            packet = packet[20:] + packet[:20]
         else:
+            # If it's not shifted neatly to index 20, it's genuinely corrupt
             raise ValueError(
-                f"Malformatted packet detected. Trailing metadata is out of bounds: "
-                f"sync={test_sync}, direction={test_direction}, version={test_version}."
+                f"Malformatted packet detected. Trailing metadata is out of bounds and "
+                f"no valid program byte found at index 20: sync={test_sync}, "
+                f"direction={test_direction}, version={test_version}."
             )
     # ---------------------------------
 
