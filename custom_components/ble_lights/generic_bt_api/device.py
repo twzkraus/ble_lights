@@ -6,7 +6,7 @@ import asyncio
 import logging
 import struct
 from contextlib import AsyncExitStack, suppress
-from ..const import NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS
+from ..const import NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS, NUM_COLOR_SLOTS
 
 from bleak import BleakClient
 from bleak.exc import BleakError
@@ -112,8 +112,6 @@ ASCII_BRIGHTNESS = "brightness"
 ASCII_SPEED = "speed"
 ASCII_DIRECTION = "direction"
 
-NUM_COLOR_SLOTS = 6
-
 
 def _ascii_command(prefix: int, ascii_payload: str) -> str:
     """Build a hex payload: 1 prefix byte + ascii-encoded payload."""
@@ -132,9 +130,12 @@ def _encode_colors_hsv(hsv_colors: list[tuple[int, int, int]]) -> str:
     payload = f"{CMD_SET_COLORS_PREFIX:02X}"
     for h, s, v in hsv_colors[:NUM_COLOR_SLOTS]:
         payload += f"{h:02X}{s:02X}{v:02X}"
-    # Device stops reading colors at the first (0, 0, 0) HSV it sees.
+
+    # Fill ALL remaining empty slots with "000000"
     if len(hsv_colors) < NUM_COLOR_SLOTS:
-        payload += "000000"
+        remaining_slots = NUM_COLOR_SLOTS - len(hsv_colors)
+        payload += "000000" * remaining_slots
+
     return payload
 
 
@@ -514,6 +515,12 @@ class GenericBTDevice:
     def set_state_callback(self, callback: Callable[[], None]) -> None:
         if callback not in self._state_callbacks:
             self._state_callbacks.append(callback)
+
+        def _remove() -> None:
+            if callback in self._state_callbacks:
+                self._state_callbacks.remove(callback)
+
+        return _remove
 
     def _update_notification_value(self, message: Optional[str], parsed: Optional[dict] = None) -> None:
         if message is None or self.last_notification_value == message:
