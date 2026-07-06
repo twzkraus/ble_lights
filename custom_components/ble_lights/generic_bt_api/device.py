@@ -23,12 +23,6 @@ _LOGGER = logging.getLogger(__name__)
 # 0 / None disables idle-disconnect entirely.
 DEFAULT_IDLE_DISCONNECT_SECONDS = 30
 
-# How often we poll the device for its current settings, in the absence of
-# anything else prompting a refresh (a write, or an upcoming device timer -
-# see _schedule_next_poll). Not exposed in the UI - change this constant
-# directly if a different cadence is needed.
-POLL_INTERVAL_SECONDS = 3600
-
 # Small buffer added after a device timer's predicted on/off transition
 # before we poll, so we're asking "what happened" shortly after the
 # transition rather than racing it.
@@ -287,6 +281,7 @@ def parse_settings_packet(raw_bytes: bytes) -> dict:
         "direction_code": direction_code,
         "direction_name": direction_name,
         "raw_hex": packet.hex(),
+        "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
@@ -386,12 +381,7 @@ class GenericBTDevice:
         """Connect, request settings, and guarantee the result is stored + published.
 
         This is the one entry point periodic polling and the sync_state
-        entity service should both call. request_and_wait() already
-        stores/publishes as a side effect of the reassembled notification
-        (via _update_notification_value), but callers previously had no way
-        to tell whether that side effect actually happened - they just got
-        back a dict or None and moved on. This raises instead of returning
-        None on timeout, so failures are visible instead of silent.
+        entity service should both call. Raises on timeout.
         """
         parsed = await self.request_and_wait(
             write_uuid, REQUEST_SETTINGS_COMMAND_HEX, notify_uuid=notify_uuid, timeout=timeout
@@ -580,12 +570,6 @@ class GenericBTDevice:
 
     def _update_notification_value(self, message: Optional[str], parsed: Optional[dict] = None) -> None:
         """Record the latest decoded reading and always publish it.
-
-        Distinct-value bookkeeping (previous_notification_value/data) only
-        shifts when the value actually differs, but state callbacks fire on
-        every call - a caller doing a manual resync or routine poll needs a
-        guaranteed state write as confirmation, even when the reading is
-        unchanged from before.
         """
         if message is None:
             return
@@ -720,10 +704,6 @@ class GenericBTDevice:
         data_as_bytes = bytearray.fromhex(data)
         await self._client.write_gatt_char(uuid, data_as_bytes, True)
         self._reset_idle_timer()
-        # A write means either a device change was just made, or we're
-        # about to resync via requestSettings - either way, "now" is a good
-        # baseline to count the next poll interval from instead of whatever
-        # was previously scheduled.
         self._schedule_next_poll()
 
     async def read_gatt(self, target_uuid):
@@ -857,18 +837,15 @@ class GenericBTDevice:
     # --- Polling -----------------------------------------------------------
     # Besides reacting to BLE notifications, we periodically ask the device
     # for its current settings so Home Assistant's view of state doesn't
-    # silently drift (e.g. someone used the physical remote, or one of the
-    # device's own timers fired). Polling cadence is intentionally not
-    # exposed in the UI - POLL_INTERVAL_SECONDS is the one place to change
-    # it.
+    # silently drift (e.g. someone used the iOS app, or one of the
+    # device's own timers fired).
 
     def start_polling(self, write_uuid: str) -> None:
         """Begin periodic polling of device state via requestSettings.
 
-        Call once - e.g. from async_added_to_hass, after subscribe_to_notify
-        has set up the notification path - with the write UUID to send the
-        requestSettings command to. Safe to call again to change the write
-        UUID; it will simply reschedule from now.
+        Call once from async_setup_entry, after subscribe_to_notify
+        has set up the notification path.
+        Safe to call again to change the write UUID; it will just reschedule.
         """
         self._poll_write_uuid = write_uuid
         self._polling_enabled = True
@@ -888,9 +865,9 @@ class GenericBTDevice:
     def _schedule_next_poll(self, override_delay: float | None = None) -> None:
         """(Re)arm the poll timer.
 
-        By default, fires 30 seconds after the next upcoming hour.
-        But if we know (from the last settings we read) of a timer whose next on/off
-        transition is expected sooner than that, wake up shortly after that instead.
+        Default: fires 30 seconds after the next top of the hour.
+        But if the last settings show a timer whose next on/off transition
+        is sooner than that, wake up shortly after that instead.
 
         An optional override_delay can be passed to manually force a poll sooner.
 
@@ -905,9 +882,7 @@ class GenericBTDevice:
             delay = override_delay
         else:
             now = datetime.now()
-            # Calculate top of the next hour
             next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
-            # Add the 30-second offset
             next_poll_target = next_hour + timedelta(seconds=30)
             delay = (next_poll_target - now).total_seconds()
 
@@ -948,14 +923,13 @@ class GenericBTDevice:
                 self._schedule_next_poll(override_delay=300.0)
 
     def _seconds_until_next_timer_event(self) -> Optional[float]:
-        """Seconds until the nearest upcoming on/off transition among the
-        device's configured timers, per the last known settings - or None
-        if there's no known/enabled timer to consider.
+        """Seconds until nearest scheduled on/off transition, or None.
 
         Only clock-time transitions (start_hour/start_minute etc.) can be
         predicted this way; sunrise/sunset-relative timers depend on sun
         data we don't have here, so those are left to the regular
-        POLL_INTERVAL_SECONDS cadence.
+        cadence.
+        TODO: pull in helper to get sunrise/sunset time? unclear what lights use, so add addtl padding
         """
         data = self.last_notification_data
         if not data:

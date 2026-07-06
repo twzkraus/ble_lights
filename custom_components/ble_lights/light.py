@@ -101,7 +101,7 @@ SET_APPLY_SCENE_SCHEMA = cv.make_entity_service_schema(
 # Attributes decoded from device notifications that belong on the light,
 # as opposed to purely diagnostic fields (timer1/timer2/version/sync_mode)
 # which stay on GenericBTStateSensor only.
-LIGHT_RELEVANT_ATTRS = ("colors", "speed", "direction_code", "direction_name", "raw_hex", "program_code", "program_name")
+LIGHT_RELEVANT_ATTRS = ("colors", "speed", "direction_code", "direction_name", "raw_hex", "program_code", "program_name", "last_updated")
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
@@ -195,7 +195,7 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
             if effect_name is not None:
                 self._attr_effect = effect_name
             else:
-                _LOGGER.debug("Unrecognized program code from device: %s", program)
+                _LOGGER.debug("Unrecognized program code from device: %s", program_code)
 
         self._attr_extra_state_attributes = {
             key: value for key, value in data.items() if key in LIGHT_RELEVANT_ATTRS
