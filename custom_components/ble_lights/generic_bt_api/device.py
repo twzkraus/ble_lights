@@ -130,9 +130,12 @@ def _encode_colors_hsv(hsv_colors: list[tuple[int, int, int]]) -> str:
     payload = f"{CMD_SET_COLORS_PREFIX:02X}"
     for h, s, v in hsv_colors[:NUM_COLOR_SLOTS]:
         payload += f"{h:02X}{s:02X}{v:02X}"
-    # Device stops reading colors at the first (0, 0, 0) HSV it sees.
+
+    # Fill ALL remaining empty slots with "000000"
     if len(hsv_colors) < NUM_COLOR_SLOTS:
-        payload += "000000"
+        remaining_slots = NUM_COLOR_SLOTS - len(hsv_colors)
+        payload += "000000" * remaining_slots
+
     return payload
 
 
