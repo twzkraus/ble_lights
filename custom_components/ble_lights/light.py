@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 import voluptuous as vol
 from bleak.exc import BleakError
@@ -101,7 +101,7 @@ SET_APPLY_SCENE_SCHEMA = cv.make_entity_service_schema(
 # Attributes decoded from device notifications that belong on the light,
 # as opposed to purely diagnostic fields (timer1/timer2/version/sync_mode)
 # which stay on GenericBTStateSensor only.
-LIGHT_RELEVANT_ATTRS = ("colors", "speed", "direction", "raw_hex")
+LIGHT_RELEVANT_ATTRS = ("colors", "speed", "direction_code", "direction_name", "raw_hex", "program_code", "program_name")
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
@@ -142,7 +142,7 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
         self._attr_effect = EFFECTS[0][0]
         self._attr_brightness = 255
         self._attr_extra_state_attributes: dict[str, Any] = {}
-        self._device.set_state_callback(self._handle_state_update)
+        self._remove_state_callback: Callable[[], None] | None = None
 
     async def async_added_to_hass(self) -> None:
         """Restore last known state, then reconcile against live device data."""
@@ -160,7 +160,15 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
                     self._attr_brightness = restored_state.attributes[ATTR_BRIGHTNESS]
                 if restored_state.attributes.get(ATTR_EFFECT) is not None:
                     self._attr_effect = restored_state.attributes[ATTR_EFFECT]
+        self._remove_state_callback = self._device.set_state_callback(self._handle_state_update)
         self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister the state-update callback."""
+        if self._remove_state_callback is not None:
+            self._remove_state_callback()
+            self._remove_state_callback = None
+        await super().async_will_remove_from_hass()
 
     @callback
     def _handle_state_update(self) -> None:
@@ -182,9 +190,8 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
 
         if (brightness := data.get("brightness")) is not None:
             self._attr_brightness = brightness
-
-        if (program := data.get("program")) is not None:
-            effect_name = CODE_TO_EFFECT.get(program)
+        if (program_code := data.get("program_code")) is not None:
+            effect_name = CODE_TO_EFFECT.get(program_code)
             if effect_name is not None:
                 self._attr_effect = effect_name
             else:

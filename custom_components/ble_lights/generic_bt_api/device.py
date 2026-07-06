@@ -513,6 +513,12 @@ class GenericBTDevice:
         if callback not in self._state_callbacks:
             self._state_callbacks.append(callback)
 
+        def _remove() -> None:
+            if callback in self._state_callbacks:
+                self._state_callbacks.remove(callback)
+
+        return _remove
+
     def _update_notification_value(self, message: Optional[str], parsed: Optional[dict] = None) -> None:
         if message is None or self.last_notification_value == message:
             return
