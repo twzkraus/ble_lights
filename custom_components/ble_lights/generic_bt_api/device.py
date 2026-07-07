@@ -191,43 +191,53 @@ def parse_settings_packet(raw_bytes: bytes) -> dict:
     packet = raw_bytes[:SETTINGS_PACKET_LENGTH]
 
     # --- SWAPPED PACKET CORRECTION ---
-    # Heuristic: Check if the metadata fields at the end contain plausible values.
-    # If chunks are swapped (bytes 20-39 arrive first), byte 37 & 38 will hold
-    # Color 6 data, which often violates the strict enum mappings.
+    # Check BOTH possible orientations (as-received, and first & last 20 swapped)
+    # enum-backed fields. Trust whichever is uniquely self-consistent.
+    def _is_plausible_orientation(candidate: bytes) -> bool:
+        program_byte = candidate[0:1]
+        on_off = candidate[20]
+        version = candidate[36]
+        sync = candidate[37]
+        direction = candidate[38]
 
-    test_sync = packet[37]
-    test_direction = packet[38]
-    test_version = packet[36]
+        return (
+            program_byte in PROGRAM_MAPPING
+            and on_off in (0, 1)
+            and version <= MAX_EXPECTED_VERSION
+            and sync in SYNC_MODE_MAPPING
+            and direction in DIRECTION_MAPPING
+        )
 
-    # Define known valid boundaries
-    VALID_SYNC_CODES = set(SYNC_MODE_MAPPING.keys())
-    VALID_DIRECTION_CODES = set(DIRECTION_MAPPING.keys())
     MAX_EXPECTED_VERSION = 50
+    swapped = packet[20:] + packet[:20]
 
-    is_sync_invalid = test_sync not in VALID_SYNC_CODES
-    is_direction_invalid = test_direction not in VALID_DIRECTION_CODES
-    is_version_implausible = test_version > MAX_EXPECTED_VERSION
+    as_received_ok = _is_plausible_orientation(packet)
+    as_swapped_ok = _is_plausible_orientation(swapped)
 
-    # If trailing indicators fail, check if the actual start of the packet moved to index 20
-    if is_sync_invalid or is_direction_invalid or is_version_implausible:
-        alternative_program_byte = packet[20:21]
-        if alternative_program_byte in PROGRAM_MAPPING:
-            # Auto-correct: Reassemble the packet by putting the second half first
-            packet = packet[20:] + packet[:20]
-        else:
-            # If it's not shifted neatly to index 20, it's genuinely corrupt
-            raise ValueError(
-                f"Malformatted packet detected. Trailing metadata is out of bounds and "
-                f"no valid program byte found at index 20: sync={test_sync}, "
-                f"direction={test_direction}, version={test_version}."
-            )
+    if as_received_ok and not as_swapped_ok:
+        pass
+    elif as_swapped_ok and not as_received_ok:
+        packet = swapped
+    elif not as_received_ok and not as_swapped_ok:
+        raise ValueError(
+            f"Malformatted packet detected: neither orientation produces a valid "
+            f"program byte, on/off flag, version, sync, and direction combination: "
+            f"{raw_bytes.hex()}"
+        )
+    else:
+        # Both orientations pass every check individually — genuinely ambiguous.
+        # Rare in practice.
+        _LOGGER.warning(
+            "Ambiguous packet: both orientations look valid, keeping as received: %s",
+            raw_bytes.hex(),
+        )
+
     # ---------------------------------
 
-    # 1. Program
+    # 1. Program and speed
     program_byte = packet[0:1]
     program_code = program_byte.decode('ascii', errors='replace')
     program_name = PROGRAM_MAPPING.get(program_byte, "Unknown")
-
     speed = packet[1]
 
     # 2. Colors (6 slots of HSV, 3 bytes each)
