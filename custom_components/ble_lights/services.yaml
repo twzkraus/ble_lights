@@ -72,64 +72,62 @@ turn_on:
           min: 0
           max: 255
           mode: slider
-    speed:
-      name: Speed
-      description: Speed value (0-255).
-      example: 128
-      selector:
-        number:
-          min: 0
-          max: 255
-          mode: slider
-    direction:
-      name: Direction
-      description: Direction to run the effect.
-      example: Center
-      selector:
-        select:
-          options:
-            - Left
-            - Center
-            - Right
-    color_1:
-      name: Color 1
-      description: First color.
-      example: "[255, 0, 0]"
-      selector:
-        color_rgb:
-      advanced: true
-    color_2:
-      name: Color 2
-      description: Second color.
-      example: "[0, 255, 0]"
-      selector:
-        color_rgb:
-      advanced: true
-    color_3:
-      name: Color 3
-      description: Third color.
-      example: "[0, 0, 255]"
-      selector:
-        color_rgb:
-      advanced: true
-    color_4:
-      name: Color 4
-      description: Fourth color.
-      selector:
-        color_rgb:
-      advanced: true
-    color_5:
-      name: Color 5
-      description: Fifth color.
-      selector:
-        color_rgb:
-      advanced: true
-    color_6:
-      name: Color 6
-      description: Sixth color.
-      selector:
-        color_rgb:
-      advanced: true
+    advanced:
+      name: Advanced settings
+      collapsed: true
+      fields:
+        speed:
+          name: Speed
+          description: Speed value (0-255).
+          example: 128
+          selector:
+            number:
+              min: 0
+              max: 255
+              mode: slider
+        direction:
+          name: Direction
+          description: Direction to run the effect.
+          example: Center
+          selector:
+            select:
+              options:
+                - Left
+                - Center
+                - Right
+        color_1:
+          name: Color 1
+          description: First color.
+          example: "[255, 0, 0]"
+          selector:
+            color_rgb:
+        color_2:
+          name: Color 2
+          description: Second color.
+          example: "[0, 255, 0]"
+          selector:
+            color_rgb:
+        color_3:
+          name: Color 3
+          description: Third color.
+          example: "[0, 0, 255]"
+          selector:
+            color_rgb:
+        color_4:
+          name: Color 4
+          description: Fourth color.
+          selector:
+            color_rgb:
+        color_5:
+          name: Color 5
+          description: Fifth color.
+          selector:
+            color_rgb:
+        color_6:
+          name: Color 6
+          description: Sixth color.
+          selector:
+            color_rgb:
 
 sync_state:
   name: Request settings
