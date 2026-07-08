@@ -3,6 +3,7 @@
 from uuid import UUID
 from typing import Callable, Optional
 import asyncio
+from datetime import datetime, timedelta
 import logging
 import struct
 from contextlib import AsyncExitStack, suppress
@@ -21,6 +22,11 @@ _LOGGER = logging.getLogger(__name__)
 # Default seconds of inactivity before we auto-disconnect.
 # 0 / None disables idle-disconnect entirely.
 DEFAULT_IDLE_DISCONNECT_SECONDS = 30
+
+# Small buffer added after a device timer's predicted on/off transition
+# before we poll, so we're asking "what happened" shortly after the
+# transition rather than racing it.
+POLL_TIMER_EVENT_BUFFER_SECONDS = 10
 
 # requestSettings response is a fixed 40-byte binary struct, NOT text.
 # Layout (little-endian, all unsigned bytes unless noted):
@@ -179,43 +185,53 @@ def parse_settings_packet(raw_bytes: bytes) -> dict:
     packet = raw_bytes[:SETTINGS_PACKET_LENGTH]
 
     # --- SWAPPED PACKET CORRECTION ---
-    # Heuristic: Check if the metadata fields at the end contain plausible values.
-    # If chunks are swapped (bytes 20-39 arrive first), byte 37 & 38 will hold
-    # Color 6 data, which often violates the strict enum mappings.
+    # Check BOTH possible orientations (as-received, and first & last 20 swapped)
+    # enum-backed fields. Trust whichever is uniquely self-consistent.
+    def _is_plausible_orientation(candidate: bytes) -> bool:
+        program_byte = candidate[0:1]
+        on_off = candidate[20]
+        version = candidate[36]
+        sync = candidate[37]
+        direction = candidate[38]
 
-    test_sync = packet[37]
-    test_direction = packet[38]
-    test_version = packet[36]
+        return (
+            program_byte in PROGRAM_MAPPING
+            and on_off in (0, 1)
+            and version <= MAX_EXPECTED_VERSION
+            and sync in SYNC_MODE_MAPPING
+            and direction in DIRECTION_MAPPING
+        )
 
-    # Define known valid boundaries
-    VALID_SYNC_CODES = set(SYNC_MODE_MAPPING.keys())
-    VALID_DIRECTION_CODES = set(DIRECTION_MAPPING.keys())
     MAX_EXPECTED_VERSION = 50
+    swapped = packet[20:] + packet[:20]
 
-    is_sync_invalid = test_sync not in VALID_SYNC_CODES
-    is_direction_invalid = test_direction not in VALID_DIRECTION_CODES
-    is_version_implausible = test_version > MAX_EXPECTED_VERSION
+    as_received_ok = _is_plausible_orientation(packet)
+    as_swapped_ok = _is_plausible_orientation(swapped)
 
-    # If trailing indicators fail, check if the actual start of the packet moved to index 20
-    if is_sync_invalid or is_direction_invalid or is_version_implausible:
-        alternative_program_byte = packet[20:21]
-        if alternative_program_byte in PROGRAM_MAPPING:
-            # Auto-correct: Reassemble the packet by putting the second half first
-            packet = packet[20:] + packet[:20]
-        else:
-            # If it's not shifted neatly to index 20, it's genuinely corrupt
-            raise ValueError(
-                f"Malformatted packet detected. Trailing metadata is out of bounds and "
-                f"no valid program byte found at index 20: sync={test_sync}, "
-                f"direction={test_direction}, version={test_version}."
-            )
+    if as_received_ok and not as_swapped_ok:
+        pass
+    elif as_swapped_ok and not as_received_ok:
+        packet = swapped
+    elif not as_received_ok and not as_swapped_ok:
+        raise ValueError(
+            f"Malformatted packet detected: neither orientation produces a valid "
+            f"program byte, on/off flag, version, sync, and direction combination: "
+            f"{raw_bytes.hex()}"
+        )
+    else:
+        # Both orientations pass every check individually — genuinely ambiguous.
+        # Rare in practice.
+        _LOGGER.warning(
+            "Ambiguous packet: both orientations look valid, keeping as received: %s",
+            raw_bytes.hex(),
+        )
+
     # ---------------------------------
 
-    # 1. Program
+    # 1. Program and speed
     program_byte = packet[0:1]
     program_code = program_byte.decode('ascii', errors='replace')
     program_name = PROGRAM_MAPPING.get(program_byte, "Unknown")
-
     speed = packet[1]
 
     # 2. Colors (6 slots of HSV, 3 bytes each)
@@ -265,6 +281,7 @@ def parse_settings_packet(raw_bytes: bytes) -> dict:
         "direction_code": direction_code,
         "direction_name": direction_name,
         "raw_hex": packet.hex(),
+        "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 
@@ -319,6 +336,14 @@ class GenericBTDevice:
         # request_and_wait()/request_settings().
         self._pending_response_futures: list[asyncio.Future] = []
 
+        # Periodic polling bookkeeping (see "--- Polling ---" section below).
+        self._poll_timer_handle: Optional[asyncio.TimerHandle] = None
+        self._poll_write_uuid: Optional[str] = None
+        self._polling_enabled: bool = False
+        # loop.time()-based timestamp of the next scheduled poll, exposed
+        # mainly for diagnostics/tests.
+        self.next_poll_time: Optional[float] = None
+
     def add_listener(self, update_callback: Callable[[], None]) -> Callable[[], None]:
         """Register a callback to be invoked whenever connection state changes.
 
@@ -347,6 +372,26 @@ class GenericBTDevice:
         """Return the parsed fields of the previous distinct notification, if any."""
         return self._previous_notification_data
 
+    async def async_refresh_settings(
+        self,
+        write_uuid: str,
+        notify_uuid: Optional[str] = None,
+        timeout: float = NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
+    ) -> dict:
+        """Connect, request settings, and guarantee the result is stored + published.
+
+        This is the one entry point periodic polling and the sync_state
+        entity service should both call. Raises on timeout.
+        """
+        parsed = await self.request_and_wait(
+            write_uuid, REQUEST_SETTINGS_COMMAND_HEX, notify_uuid=notify_uuid, timeout=timeout
+        )
+        if parsed is None:
+            raise GenericBTTimeoutError(
+                f"No complete response to requestSettings within {timeout}s"
+            )
+        return parsed
+
     async def update(self):
         if self._read_uuid is None:
             return
@@ -361,6 +406,7 @@ class GenericBTDevice:
 
     async def stop(self):
         """Called on integration unload/reload - make sure we actually let go of the connection."""
+        self.stop_polling()
         await self.disconnect()
         self._notify_uuid = None
         self._read_uuid = None
@@ -523,10 +569,13 @@ class GenericBTDevice:
         return _remove
 
     def _update_notification_value(self, message: Optional[str], parsed: Optional[dict] = None) -> None:
-        if message is None or self.last_notification_value == message:
+        """Record the latest decoded reading and always publish it.
+        """
+        if message is None:
             return
-        self._previous_notification_value = self.last_notification_value
-        self._previous_notification_data = self.last_notification_data
+        if self.last_notification_value != message:
+            self._previous_notification_value = self.last_notification_value
+            self._previous_notification_data = self.last_notification_data
         self.last_notification_value = message
         self.last_notification_data = parsed
         if self._notification_callback is not None:
@@ -534,6 +583,7 @@ class GenericBTDevice:
         for state_callback in list(self._state_callbacks):
             with suppress(Exception):
                 state_callback()
+        self._schedule_next_poll()
 
     def _decode_data(self, data) -> tuple[Optional[str], Optional[dict]]:
         """Decode a raw GATT payload.
@@ -654,6 +704,7 @@ class GenericBTDevice:
         data_as_bytes = bytearray.fromhex(data)
         await self._client.write_gatt_char(uuid, data_as_bytes, True)
         self._reset_idle_timer()
+        self._schedule_next_poll()
 
     async def read_gatt(self, target_uuid):
         await self.get_client()
@@ -782,6 +833,133 @@ class GenericBTDevice:
         return await self.request_and_wait(
             write_uuid, REQUEST_SETTINGS_COMMAND_HEX, notify_uuid=notify_uuid, timeout=timeout
         )
+
+    # --- Polling -----------------------------------------------------------
+    # Besides reacting to BLE notifications, we periodically ask the device
+    # for its current settings so Home Assistant's view of state doesn't
+    # silently drift (e.g. someone used the iOS app, or one of the
+    # device's own timers fired).
+
+    def start_polling(self, write_uuid: str) -> None:
+        """Begin periodic polling of device state via requestSettings.
+
+        Call once from async_setup_entry, after subscribe_to_notify
+        has set up the notification path.
+        Safe to call again to change the write UUID; it will just reschedule.
+        """
+        self._poll_write_uuid = write_uuid
+        self._polling_enabled = True
+        asyncio.create_task(self._poll())
+
+    def stop_polling(self) -> None:
+        """Stop periodic polling, e.g. on integration unload."""
+        self._polling_enabled = False
+        self._cancel_poll_timer()
+        self.next_poll_time = None
+
+    def _cancel_poll_timer(self) -> None:
+        if self._poll_timer_handle is not None:
+            self._poll_timer_handle.cancel()
+            self._poll_timer_handle = None
+
+    def _schedule_next_poll(self, override_delay: float | None = None) -> None:
+        """(Re)arm the poll timer.
+
+        Default: fires 30 seconds after the next top of the hour.
+        But if the last settings show a timer whose next on/off transition
+        is sooner than that, wake up shortly after that instead.
+
+        An optional override_delay can be passed to manually force a poll sooner.
+
+        No-op if polling hasn't been started via start_polling().
+        """
+        if not self._polling_enabled or self._poll_write_uuid is None:
+            return
+        self._cancel_poll_timer()
+
+        # 1. Determine the default delay (30 seconds past the next hour)
+        if override_delay is not None:
+            delay = override_delay
+        else:
+            now = datetime.now()
+            next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            next_poll_target = next_hour + timedelta(seconds=30)
+            delay = (next_poll_target - now).total_seconds()
+
+        # 2. Check if a device timer event happens even sooner
+        next_timer_event = self._seconds_until_next_timer_event()
+        if next_timer_event is not None and next_timer_event < delay:
+            delay = next_timer_event
+
+        # 3. Schedule the poll
+        loop = asyncio.get_event_loop()
+        self.next_poll_time = loop.time() + delay
+        self._poll_timer_handle = loop.call_later(
+            delay, lambda: asyncio.create_task(self._poll())
+        )
+        _LOGGER.debug("Next poll scheduled in %.0fs", delay)
+
+    async def _poll(self) -> None:
+        """Timer-fired poll: refresh state from the device and notify HA."""
+        self._poll_timer_handle = None
+        if not self._polling_enabled or self._poll_write_uuid is None:
+            return
+        _LOGGER.debug("Polling device for current settings")
+        success = False
+        try:
+            await self.async_refresh_settings(self._poll_write_uuid)
+            success = True
+        except (GenericBTBleakError, GenericBTTimeoutError):
+            _LOGGER.debug("Poll failed to connect/communicate with device", exc_info=True)
+        except Exception:  # pylint: disable=broad-except
+            _LOGGER.debug("Unexpected error while polling", exc_info=True)
+        finally:
+            # Always reschedule, even after a failure/timeout, so a
+            # transient BLE hiccup doesn't permanently stop polling.
+            if success:
+                self._schedule_next_poll()
+            else:
+                _LOGGER.debug("Poll failed; scheduling retry in 5 minutes")
+                self._schedule_next_poll(override_delay=300.0)
+
+    def _seconds_until_next_timer_event(self) -> Optional[float]:
+        """Seconds until nearest scheduled on/off transition, or None.
+
+        Only clock-time transitions (start_hour/start_minute etc.) can be
+        predicted this way; sunrise/sunset-relative timers depend on sun
+        data we don't have here, so those are left to the regular
+        cadence.
+        TODO: pull in helper to get sunrise/sunset time? unclear what lights use, so add addtl padding
+        """
+        data = self.last_notification_data
+        if not data:
+            return None
+
+        now = datetime.now()
+        candidates: list[float] = []
+
+        for timer_key in ("timer1", "timer2"):
+            timer = data.get(timer_key)
+            if not timer or not timer.get("timer_on_off"):
+                continue
+            for sun_flag_key, hour_key, minute_key in (
+                ("start_sunset", "start_hour", "start_minute"),
+                ("end_sunrise", "end_hour", "end_minute"),
+            ):
+                if timer.get(sun_flag_key):
+                    continue  # sunrise/sunset-relative - can't predict
+                hour, minute = timer.get(hour_key), timer.get(minute_key)
+                if hour is None or minute is None:
+                    continue
+                try:
+                    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                except ValueError:
+                    continue  # garbage hour/minute value from the device
+                if candidate <= now:
+                    candidate += timedelta(days=1)
+                candidates.append((candidate - now).total_seconds() + POLL_TIMER_EVENT_BUFFER_SECONDS)
+
+        return min(candidates) if candidates else None
 
     def update_from_advertisement(self, advertisement):
         pass

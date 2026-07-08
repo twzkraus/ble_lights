@@ -7,9 +7,12 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
+
+from .generic_bt_api.device import GenericBTBleakError, GenericBTTimeoutError
 
 from .const import DEFAULT_NOTIFY_UUID, DEFAULT_WRITE_UUID, DOMAIN, NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS, Schema
 from .coordinator import GenericBTCoordinator
@@ -99,21 +102,26 @@ class GenericBTStateSensor(GenericBTEntity, SensorEntity, RestoreEntity):
     async def async_request_settings(self, timeout: float | None = None) -> None:
         """Entity service handler: manually trigger a requestSettings round-trip.
 
-        The response flows through the normal notification pipeline
-        (device callback -> _handle_state_update -> async_write_ha_state),
-        so there's nothing further to do here beyond kicking it off and
-        surfacing a timeout if the device never replies.
+        async_refresh_settings() stores the result and publishes it through
+        the normal state-callback pipeline before returning, so there's
+        nothing further to do here beyond kicking it off and surfacing a
+        failure if the device never replies.
         """
-        result = await self._device.request_settings(
-            DEFAULT_WRITE_UUID,
-            notify_uuid=DEFAULT_NOTIFY_UUID,
-            timeout=timeout if timeout is not None else NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
-        )
-        if result is None:
-            _LOGGER.warning(
-                "request_settings service call for %s timed out waiting for a complete response",
-                self.entity_id,
+        try:
+            await self._device.async_refresh_settings(
+                DEFAULT_WRITE_UUID,
+                notify_uuid=DEFAULT_NOTIFY_UUID,
+                timeout=timeout if timeout is not None else NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
             )
+        except (GenericBTBleakError, GenericBTTimeoutError) as exc:
+            _LOGGER.warning(
+                "sync_state service call for %s failed: %s",
+                self.entity_id,
+                exc,
+            )
+            raise HomeAssistantError(
+                f"Could not sync settings for {self.entity_id}"
+            ) from exc
 
 
 class GenericBTPreviousStateSensor(GenericBTStateSensor):

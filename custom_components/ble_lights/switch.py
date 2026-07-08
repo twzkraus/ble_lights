@@ -9,7 +9,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
+from .const import DOMAIN, DEFAULT_WRITE_UUID
 from .coordinator import GenericBTCoordinator
 from .entity import GenericBTEntity
 
@@ -48,6 +48,7 @@ class GenericBTConnectionSwitch(GenericBTEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs) -> None:
         """Connect now."""
         await self._device.get_client()
+        await self._device.request_settings(DEFAULT_WRITE_UUID)
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:

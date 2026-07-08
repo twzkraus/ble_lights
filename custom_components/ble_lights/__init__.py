@@ -9,7 +9,7 @@ from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .const import DEFAULT_NOTIFY_UUID, DOMAIN
+from .const import DEFAULT_NOTIFY_UUID, DEFAULT_WRITE_UUID, DOMAIN
 from .coordinator import GenericBTCoordinator
 from .generic_bt_api.device import GenericBTDevice
 
@@ -47,6 +47,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             DEFAULT_NOTIFY_UUID,
             exc_info=True,
         )
+
+    device.start_polling(DEFAULT_WRITE_UUID)
 
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
