@@ -7,6 +7,6 @@
   "iot_class": "local_poll",
   "integration_type": "hub",
   "version": "1.0.0",
-  "documentation": "https://github.com/twzkraus/generic_bt",
-  "issue_tracker": "https://github.com/twzkraus/generic_bt/issues"
+  "documentation": "https://github.com/twzkraus/ble_lights",
+  "issue_tracker": "https://github.com/twzkraus/ble_lights/issues"
 }
