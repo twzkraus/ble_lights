@@ -322,9 +322,7 @@ class GenericBTDevice:
         self._notify_active: bool = False
         self._state_callbacks: list[Callable[[], None]] = []
         self.last_notification_value: Optional[str] = None
-        self._previous_notification_value: Optional[str] = None
         self.last_notification_data: Optional[dict] = None
-        self._previous_notification_data: Optional[dict] = None
 
         # Fragmented-notification reassembly. Bytes accumulate here across
         # multiple _handle_notification calls until we have a full packet
@@ -361,16 +359,6 @@ class GenericBTDevice:
     def _notify_listeners(self) -> None:
         for update_callback in list(self._listeners):
             update_callback()
-
-    @property
-    def previous_notification_value(self) -> Optional[str]:
-        """Return the last distinct value seen before the current one."""
-        return self._previous_notification_value
-
-    @property
-    def previous_notification_data(self) -> Optional[dict]:
-        """Return the parsed fields of the previous distinct notification, if any."""
-        return self._previous_notification_data
 
     async def async_refresh_settings(
         self,
@@ -573,9 +561,6 @@ class GenericBTDevice:
         """
         if message is None:
             return
-        if self.last_notification_value != message:
-            self._previous_notification_value = self.last_notification_value
-            self._previous_notification_data = self.last_notification_data
         self.last_notification_value = message
         self.last_notification_data = parsed
         if self._notification_callback is not None:
