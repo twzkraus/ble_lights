@@ -36,10 +36,10 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: GenericBTCoordinator = hass.data[DOMAIN][config_entry.entry_id]
-    async_add_entities([GenericBTSelect(coordinator)])
+    async_add_entities([GenericBTColorPaletteSelect(coordinator)])
 
 
-class GenericBTSelect(GenericBTEntity, SelectEntity):
+class GenericBTColorPaletteSelect(GenericBTEntity, SelectEntity):
     _attr_icon = "mdi:palette"
     _attr_options = COLOR_PALETTE_NAMES
     _attr_name = "Color Palette"
