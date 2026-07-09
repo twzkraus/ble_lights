@@ -21,7 +21,7 @@ from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import COLOR_PALETTES, COLOR_PALETTE_NAMES, DEFAULT_WRITE_UUID, DOMAIN
+from .const import CODE_TO_EFFECT, COLOR_PALETTES, COLOR_PALETTE_NAMES, DEFAULT_WRITE_UUID, DIRECTION_CODES, DIRECTIONS, DOMAIN, EFFECT_CODES, EFFECTS
 from .coordinator import GenericBTCoordinator
 from .entity import GenericBTEntity
 from .generic_bt_api.device import SETTINGS_PACKET_LENGTH, NUM_COLOR_SLOTS, parse_settings_packet
@@ -31,39 +31,6 @@ _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 1
 
 # --- Protocol -----------------------------------------------------------
-
-DIRECTIONS: list[tuple[str, int]] = [
-    ("Left", 0),
-    ("Center", 1),
-    ("Right", 2),
-]
-DIRECTION_CODES: dict[str, int] = dict(DIRECTIONS)
-
-# (name, code)
-EFFECTS: list[tuple[str, str]] = [
-    ("Still", "0"),
-    ("Blink", "B"),
-    ("Twinkle", "W"),
-    ("Chase", "C"),
-    ("Moving Wave", "M"),
-    ("Ants", "A"),
-    ("Sparkle", "S"),
-    ("White Sparkle", "P"),
-    ("Three Block", "3"),
-    ("Trains", "T"),
-    ("Cross Fade", "F"),
-    ("Blocks", "L"),
-    ("Block Gradient", "K"),
-    ("Spiral", "I"),
-    ("Shimmer", "H"),
-    ("Glow Worm", "G"),
-    ("Clouds", "Y"),
-    ("Color Pulse", "U"),
-    ("Random Placement", "R"),
-    ("Electric Shock", "E"),
-]
-EFFECT_CODES: dict[str, str] = dict(EFFECTS)
-CODE_TO_EFFECT: dict[str, str] = {code: name for name, code in EFFECTS}
 
 def _validate_settings_hex(value: str) -> str:
     """Validate that value is a hex string decoding to exactly SETTINGS_PACKET_LENGTH bytes."""

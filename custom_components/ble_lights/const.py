@@ -75,6 +75,39 @@ DIRECTION_MAPPING = {
     2: "Right"
 }
 
+DIRECTIONS: list[tuple[str, int]] = [
+    ("Left", 0),
+    ("Center", 1),
+    ("Right", 2),
+]
+DIRECTION_CODES: dict[str, int] = dict(DIRECTIONS)
+
+# (name, code)
+EFFECTS: list[tuple[str, str]] = [
+    ("Still", "0"),
+    ("Blink", "B"),
+    ("Twinkle", "W"),
+    ("Chase", "C"),
+    ("Moving Wave", "M"),
+    ("Ants", "A"),
+    ("Sparkle", "S"),
+    ("White Sparkle", "P"),
+    ("Three Block", "3"),
+    ("Trains", "T"),
+    ("Cross Fade", "F"),
+    ("Blocks", "L"),
+    ("Block Gradient", "K"),
+    ("Spiral", "I"),
+    ("Shimmer", "H"),
+    ("Glow Worm", "G"),
+    ("Clouds", "Y"),
+    ("Color Pulse", "U"),
+    ("Random Placement", "R"),
+    ("Electric Shock", "E"),
+]
+EFFECT_CODES: dict[str, str] = dict(EFFECTS)
+CODE_TO_EFFECT: dict[str, str] = {code: name for name, code in EFFECTS}
+
 SYNC_MODE_MAPPING = {
     0: "Standalone",
     1: "Master",
