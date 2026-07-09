@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Callable
+from dataclasses import asdict
 
 import voluptuous as vol
 from bleak.exc import BleakError
@@ -186,20 +187,18 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
         if data is None:
             return
 
-        self._attr_is_on = bool(data.get("is_on"))
+        self._attr_is_on = bool(data.is_on)
 
-        if (brightness := data.get("brightness")) is not None:
+        if (brightness := data.brightness) is not None:
             self._attr_brightness = brightness
-        if (program_code := data.get("program_code")) is not None:
+        if (program_code := data.program_code) is not None:
             effect_name = CODE_TO_EFFECT.get(program_code)
             if effect_name is not None:
                 self._attr_effect = effect_name
             else:
                 _LOGGER.debug("Unrecognized program code from device: %s", program_code)
 
-        self._attr_extra_state_attributes = {
-            key: value for key, value in data.items() if key in LIGHT_RELEVANT_ATTRS
-        }
+        self._attr_extra_state_attributes = asdict(data)
 
     # ---------------------------- Built-in Entity Services --------------------------------
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -310,26 +309,26 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
 
         parsed = parse_settings_packet(raw_bytes)
 
-        if parsed["is_on"]:
+        if parsed.is_on:
             await self._device.turn_on(DEFAULT_WRITE_UUID)
         else:
             await self._device.turn_off(DEFAULT_WRITE_UUID)
 
         hsv_colors = [
-            (c["hue"], c["saturation"], c["value"]) for c in parsed["colors"]
+            (c["hue"], c["saturation"], c["value"]) for c in parsed.colors
         ]
         await self._device.set_colors_hsv(DEFAULT_WRITE_UUID, hsv_colors)
         if self.coordinator.palette_select_entity is not None:
             self.coordinator.palette_select_entity.invalidate_palette()
 
-        await self._device.set_effect(DEFAULT_WRITE_UUID, parsed["program_code"])
-        await self._device.set_direction(DEFAULT_WRITE_UUID, parsed["direction_code"])
-        await self._device.set_speed(DEFAULT_WRITE_UUID, parsed["speed"])
-        await self._device.set_brightness(DEFAULT_WRITE_UUID, parsed["brightness"])
+        await self._device.set_effect(DEFAULT_WRITE_UUID, parsed.program_code)
+        await self._device.set_direction(DEFAULT_WRITE_UUID, parsed.direction_code)
+        await self._device.set_speed(DEFAULT_WRITE_UUID, parsed.speed)
+        await self._device.set_brightness(DEFAULT_WRITE_UUID, parsed.brightness)
 
-        self._attr_is_on = parsed["is_on"]
-        self._attr_brightness = parsed["brightness"]
-        effect_name = CODE_TO_EFFECT.get(parsed["program_code"])
+        self._attr_is_on = parsed.is_on
+        self._attr_brightness = parsed.brightness
+        effect_name = CODE_TO_EFFECT.get(parsed.program_code)
         if effect_name is not None:
             self._attr_effect = effect_name
 

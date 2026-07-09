@@ -107,7 +107,7 @@ class GenericBTSpeedNumber(GenericBTEntity, NumberEntity, RestoreEntity):
         data = self._device.last_notification_data
         if data is None:
             return
-        if (speed := data.get("speed")) is not None:
+        if (speed := data.speed) is not None:
             self._attr_native_value = speed
 
     async def async_set_native_value(self, value: float) -> None:
@@ -161,7 +161,7 @@ class GenericBTBrightnessNumber(GenericBTEntity, NumberEntity, RestoreEntity):
         data = self._device.last_notification_data
         if data is None:
             return
-        if (brightness := data.get("brightness")) is not None:
+        if (brightness := data.brightness) is not None:
             self._attr_native_value = brightness
 
     async def async_set_native_value(self, value: float) -> None:
