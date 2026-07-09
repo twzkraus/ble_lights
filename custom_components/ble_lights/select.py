@@ -8,7 +8,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import GenericBTCoordinator
 from .entity import GenericBTEntity
-from .const import COLOR_PALETTES, COLOR_PALETTE_NAMES, DEFAULT_WRITE_UUID, DOMAIN, NUM_COLOR_SLOTS
+from .const import Direction, COLOR_PALETTES, COLOR_PALETTE_NAMES, DEFAULT_WRITE_UUID, DOMAIN, NUM_COLOR_SLOTS, DIRECTION_NAMES
 
 
 def _palette_to_hsv_tuples(colors: list[list[int]]) -> tuple[tuple[int, int, int], ...]:
@@ -36,7 +36,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator: GenericBTCoordinator = hass.data[DOMAIN][config_entry.entry_id]
-    async_add_entities([GenericBTColorPaletteSelect(coordinator)])
+    async_add_entities([GenericBTColorPaletteSelect(coordinator), GenericBTDirectionSelect(coordinator)])
 
 
 class GenericBTColorPaletteSelect(GenericBTEntity, SelectEntity):
@@ -94,3 +94,50 @@ class GenericBTColorPaletteSelect(GenericBTEntity, SelectEntity):
         """Clear the selected palette, e.g. when color is set outside select_option."""
         self._attr_current_option = None
         self.async_write_ha_state()
+
+
+class GenericBTDirectionSelect(GenericBTEntity, SelectEntity):
+    _attr_icon = "mdi:sign-direction"
+    _attr_options = DIRECTION_NAMES
+    _attr_name = "Effect Direction"
+
+    def __init__(self, coordinator: GenericBTCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{coordinator.base_unique_id}_effect_direction"
+        self._attr_current_option: str | None = None
+        self._remove_state_callback: Callable[[], None] | None = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._remove_state_callback = self._device.set_state_callback(self._handle_device_state_update)
+        # Reflect state the device already reported if available
+        self._update_current_option_from_device()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._remove_state_callback is not None:
+            self._remove_state_callback()
+            self._remove_state_callback = None
+        await super().async_will_remove_from_hass()
+
+    def _handle_device_state_update(self) -> None:
+        """Called whenever the device pushes freshly parsed settings data."""
+        self._update_current_option_from_device()
+        self.async_write_ha_state()
+
+    def _update_current_option_from_device(self) -> None:
+        data = self._device.last_notification_data
+        if data is None:
+            return
+        if (direction := data.direction_name) is not None:
+            self._attr_current_option = direction
+
+    def set_direction_option(self, option: str) -> None:
+        """Optimistically set the selected direction without sending a command to the device."""
+        self._attr_current_option = option
+        self.async_write_ha_state()
+
+    async def async_select_option(self, option: str) -> None:
+        direction_code = Direction[option].value
+        await self._device.set_direction(DEFAULT_WRITE_UUID, direction_code)
+        await self._device.request_settings(DEFAULT_WRITE_UUID)
+        self.set_direction_option(option)
