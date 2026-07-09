@@ -22,6 +22,8 @@ _LOGGER = logging.getLogger(__name__)
 
 _TIMER_STRUCT = struct.Struct("<7B")  # timerOnOff, startSunset, startHour, startMinute, endSunrise, endHour, endMinute
 
+MAX_EXPECTED_VERSION = 50
+
 def _parse_timer(raw: bytes) -> dict:
     (timer_on_off, start_sunset, start_hour, start_minute,
      end_sunrise, end_hour, end_minute) = _TIMER_STRUCT.unpack(raw)
@@ -158,7 +160,6 @@ def parse_settings_packet(raw_bytes: bytes) -> DeviceSettings:
             and direction in DIRECTION_MAPPING
         )
 
-    MAX_EXPECTED_VERSION = 50
     swapped = packet[20:] + packet[:20]
 
     as_received_ok = _is_plausible_orientation(packet)
