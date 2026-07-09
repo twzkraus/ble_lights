@@ -74,6 +74,9 @@ class GenericBTSelect(GenericBTEntity, SelectEntity):
     def _update_current_option_from_device(self) -> None:
         data = self._device.last_notification_data
         colors = data.get("colors") if data else None
+        if colors is None:
+            # No data yet (mid-reconnect blip) — keep prior state
+            return
         self._attr_current_option = _match_palette(colors)
 
     def set_palette_option(self, option: str) -> None:
