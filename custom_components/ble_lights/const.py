@@ -45,30 +45,6 @@ COLOR_PALETTES: dict[str, [[int]]] = {
 
 COLOR_PALETTE_NAMES = list(COLOR_PALETTES.keys())
 
-# Mappings for human-readable attributes
-PROGRAM_MAPPING = {
-    b"0": "Still",
-    b"B": "Blink",
-    b"W": "Twinkle",
-    b"C": "Chase",
-    b"M": "Moving Wave",
-    b"A": "Ants",
-    b"S": "Sparkle",
-    b"P": "White Sparkle",
-    b"3": "Three Block",
-    b"T": "Trains",
-    b"F": "Cross Fade",
-    b"L": "Blocks",
-    b"K": "Block Gradient",
-    b"I": "Spiral",
-    b"H": "Shimmer",
-    b"G": "Glow Worm",
-    b"Y": "Clouds",
-    b"U": "Color Pulse",
-    b"R": "Random Placement",
-    b"E": "Electric Shock",
-}
-
 class Direction(IntEnum):
     Left = 0
     Center = 1
@@ -79,31 +55,62 @@ DIRECTION_NAMES: list[str] = [d.name for d in Direction]
 DIRECTIONS: list[tuple[str, int]] = [(d.name, d.value) for d in Direction]
 DIRECTION_CODES: dict[str, int] = {d.name: d.value for d in Direction}
 
-# (name, code)
+class Effect(str, Enum):
+    Still = "0"
+    Blink = "B"
+    Twinkle = "W"
+    Chase = "C"
+    MovingWave = "M"
+    Ants = "A"
+    Sparkle = "S"
+    WhiteSparkle = "P"
+    ThreeBlock = "3"
+    Trains = "T"
+    CrossFade = "F"
+    Blocks = "L"
+    BlockGradient = "K"
+    Spiral = "I"
+    Shimmer = "H"
+    GlowWorm = "G"
+    Clouds = "Y"
+    ColorPulse = "U"
+    RandomPlacement = "R"
+    ElectricShock = "E"
+
+# Human-readable names differ from the enum member names above (which must be
+# valid identifiers), so keep an explicit label map keyed by the enum member.
+EFFECT_LABELS: dict[Effect, str] = {
+    Effect.Still: "Still",
+    Effect.Blink: "Blink",
+    Effect.Twinkle: "Twinkle",
+    Effect.Chase: "Chase",
+    Effect.MovingWave: "Moving Wave",
+    Effect.Ants: "Ants",
+    Effect.Sparkle: "Sparkle",
+    Effect.WhiteSparkle: "White Sparkle",
+    Effect.ThreeBlock: "Three Block",
+    Effect.Trains: "Trains",
+    Effect.CrossFade: "Cross Fade",
+    Effect.Blocks: "Blocks",
+    Effect.BlockGradient: "Block Gradient",
+    Effect.Spiral: "Spiral",
+    Effect.Shimmer: "Shimmer",
+    Effect.GlowWorm: "Glow Worm",
+    Effect.Clouds: "Clouds",
+    Effect.ColorPulse: "Color Pulse",
+    Effect.RandomPlacement: "Random Placement",
+    Effect.ElectricShock: "Electric Shock",
+}
+
+# Backward-compatible exports, derived from the enum + label map
+PROGRAM_MAPPING: dict[bytes, str] = {
+    e.value.encode(): label for e, label in EFFECT_LABELS.items()
+}
 EFFECTS: list[tuple[str, str]] = [
-    ("Still", "0"),
-    ("Blink", "B"),
-    ("Twinkle", "W"),
-    ("Chase", "C"),
-    ("Moving Wave", "M"),
-    ("Ants", "A"),
-    ("Sparkle", "S"),
-    ("White Sparkle", "P"),
-    ("Three Block", "3"),
-    ("Trains", "T"),
-    ("Cross Fade", "F"),
-    ("Blocks", "L"),
-    ("Block Gradient", "K"),
-    ("Spiral", "I"),
-    ("Shimmer", "H"),
-    ("Glow Worm", "G"),
-    ("Clouds", "Y"),
-    ("Color Pulse", "U"),
-    ("Random Placement", "R"),
-    ("Electric Shock", "E"),
+    (label, e.value) for e, label in EFFECT_LABELS.items()
 ]
-EFFECT_CODES: dict[str, str] = dict(EFFECTS)
-CODE_TO_EFFECT: dict[str, str] = {code: name for name, code in EFFECTS}
+EFFECT_CODES: dict[str, str] = {label: e.value for e, label in EFFECT_LABELS.items()}
+CODE_TO_EFFECT: dict[str, str] = {e.value: label for e, label in EFFECT_LABELS.items()}
 
 SYNC_MODE_MAPPING = {
     0: "Standalone",
