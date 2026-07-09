@@ -1,6 +1,6 @@
 """Constants"""
 import voluptuous as vol
-from enum import Enum
+from enum import Enum, IntEnum
 
 from homeassistant.helpers.config_validation import make_entity_service_schema
 import homeassistant.helpers.config_validation as cv
@@ -69,18 +69,15 @@ PROGRAM_MAPPING = {
     b"E": "Electric Shock",
 }
 
-DIRECTION_MAPPING = {
-    0: "Left",
-    1: "Center",
-    2: "Right"
-}
+class Direction(IntEnum):
+    Left = 0
+    Center = 1
+    Right = 2
 
-DIRECTIONS: list[tuple[str, int]] = [
-    ("Left", 0),
-    ("Center", 1),
-    ("Right", 2),
-]
-DIRECTION_CODES: dict[str, int] = dict(DIRECTIONS)
+DIRECTION_MAPPING: dict[int, str] = {d.value: d.name for d in Direction}
+DIRECTION_NAMES: list[str] = [d.name for d in Direction]
+DIRECTIONS: list[tuple[str, int]] = [(d.name, d.value) for d in Direction]
+DIRECTION_CODES: dict[str, int] = {d.name: d.value for d in Direction}
 
 # (name, code)
 EFFECTS: list[tuple[str, str]] = [
