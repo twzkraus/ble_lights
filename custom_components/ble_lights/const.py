@@ -45,6 +45,69 @@ COLOR_PALETTES: dict[str, [[int]]] = {
 
 COLOR_PALETTE_NAMES = list(COLOR_PALETTES.keys())
 
+# Mappings for human-readable attributes
+PROGRAM_MAPPING = {
+    b"0": "Still",
+    b"B": "Blink",
+    b"W": "Twinkle",
+    b"C": "Chase",
+    b"M": "Moving Wave",
+    b"A": "Ants",
+    b"S": "Sparkle",
+    b"P": "White Sparkle",
+    b"3": "Three Block",
+    b"T": "Trains",
+    b"F": "Cross Fade",
+    b"L": "Blocks",
+    b"K": "Block Gradient",
+    b"I": "Spiral",
+    b"H": "Shimmer",
+    b"G": "Glow Worm",
+    b"Y": "Clouds",
+    b"U": "Color Pulse",
+    b"R": "Random Placement",
+    b"E": "Electric Shock",
+}
+
+DIRECTION_MAPPING = {
+    0: "Left",
+    1: "Center",
+    2: "Right"
+}
+
+SYNC_MODE_MAPPING = {
+    0: "Standalone",
+    1: "Master",
+    2: "Slave"
+}
+
+# Default seconds of inactivity before we auto-disconnect.
+# 0 / None disables idle-disconnect entirely.
+DEFAULT_IDLE_DISCONNECT_SECONDS = 30
+
+# Small buffer added after a device timer's predicted on/off transition
+# before we poll, so we're asking "what happened" shortly after the
+# transition rather than racing it.
+POLL_TIMER_EVENT_BUFFER_SECONDS = 10
+
+# requestSettings response is a fixed 40-byte binary struct, NOT text.
+# Layout (little-endian, all unsigned bytes unless noted):
+#   1  program
+#   1  speed
+#   18 colors[6] (hsv triples, 3 bytes each)
+#   1  onOffSwitch
+#   7  timer1Settings
+#   7  timer2Settings
+#   1  brightness
+#   1  version
+#   1  syncMode
+#   1  direction
+#   1  unused
+SETTINGS_PACKET_LENGTH = 40
+
+# "requestSettings" command: [1-byte length of payload below][ASCII payload]
+REQUEST_SETTINGS_COMMAND_HEX = "0f7265717565737453657474696e6773"
+
 class Schema(Enum):
     """General used service schema definition"""
 
