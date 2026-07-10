@@ -125,7 +125,7 @@ DEFAULT_IDLE_DISCONNECT_SECONDS = 30
 # Small buffer added after a device timer's predicted on/off transition
 # before we poll, so we're asking "what happened" shortly after the
 # transition rather than racing it.
-POLL_TIMER_EVENT_BUFFER_SECONDS = 10
+POLL_TIMER_EVENT_BUFFER_SECONDS = 20
 
 # requestSettings response is a fixed 40-byte binary struct, NOT text.
 # Layout (little-endian, all unsigned bytes unless noted):

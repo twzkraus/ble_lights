@@ -519,7 +519,8 @@ class GenericBTDevice:
         if message is None:
             return
         self.last_notification_value = message
-        self.last_notification_data = parsed
+        if parsed is not None:
+            self.last_notification_data = parsed
         if self._notification_callback is not None:
             self._notification_callback(message)
         for state_callback in list(self._state_callbacks):
@@ -619,7 +620,14 @@ class GenericBTDevice:
         message, parsed = self._decode_data(complete_bytes)
         _LOGGER.debug("Reassembled complete notification payload=%r parsed=%r", message, parsed)
         self._update_notification_value(message, parsed)
-        self._resolve_pending_response_futures(parsed)
+
+        if parsed is not None:
+            self._resolve_pending_response_futures(parsed)
+        else:
+            _LOGGER.debug(
+                "Discarding malformed reassembled packet, leaving pending futures outstanding: %s",
+                complete_bytes.hex(),
+            )
 
         # Rare: the device sent us the start of a *second* packet in the
         # same batch of fragments. Give it its own reassembly window rather
@@ -848,21 +856,28 @@ class GenericBTDevice:
             return
         _LOGGER.debug("Polling device for current settings")
         success = False
-        try:
-            await self.async_refresh_settings(self._poll_write_uuid)
-            success = True
-        except (GenericBTBleakError, GenericBTTimeoutError):
-            _LOGGER.debug("Poll failed to connect/communicate with device", exc_info=True)
-        except Exception:  # pylint: disable=broad-except
-            _LOGGER.debug("Unexpected error while polling", exc_info=True)
-        finally:
-            # Always reschedule, even after a failure/timeout, so a
-            # transient BLE hiccup doesn't permanently stop polling.
-            if success:
-                self._schedule_next_poll()
-            else:
-                _LOGGER.debug("Poll failed; scheduling retry in 5 minutes")
-                self._schedule_next_poll(override_delay=300.0)
+        for attempt in range(2):  # one quick retry before the longer backoff
+            try:
+                await self.async_refresh_settings(self._poll_write_uuid)
+                success = True
+                break
+            except GenericBTTimeoutError:
+                if attempt == 0:
+                    _LOGGER.debug("Poll got no usable response, retrying now")
+                    continue
+                _LOGGER.debug("Poll timed out again on retry", exc_info=True)
+            except GenericBTBleakError:
+                _LOGGER.debug("Poll failed to connect/communicate with device", exc_info=True)
+                break  # connectivity issue - retrying immediately won't help, go to retry with override_delay
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.debug("Unexpected error while polling", exc_info=True)
+                break
+
+        if success:
+            self._schedule_next_poll()
+        else:
+            _LOGGER.debug("Poll failed; scheduling retry in 5 minutes")
+            self._schedule_next_poll(override_delay=300.0)
 
     def _seconds_until_next_timer_event(self) -> Optional[float]:
         """Seconds until nearest scheduled on/off transition, or None.
