@@ -3,11 +3,12 @@
 from uuid import UUID
 from typing import Callable, Optional
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
 import struct
 from contextlib import AsyncExitStack, suppress
-from ..const import NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS, NUM_COLOR_SLOTS
+from ..const import DEFAULT_IDLE_DISCONNECT_SECONDS, DIRECTION_MAPPING, NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS, NUM_COLOR_SLOTS, POLL_TIMER_EVENT_BUFFER_SECONDS, PROGRAM_MAPPING, REQUEST_SETTINGS_COMMAND_HEX, SETTINGS_PACKET_LENGTH, SYNC_MODE_MAPPING
 
 from bleak import BleakClient
 from bleak.exc import BleakError
@@ -19,34 +20,9 @@ except ImportError:  # pragma: no cover - optional dependency in tests
 
 _LOGGER = logging.getLogger(__name__)
 
-# Default seconds of inactivity before we auto-disconnect.
-# 0 / None disables idle-disconnect entirely.
-DEFAULT_IDLE_DISCONNECT_SECONDS = 30
-
-# Small buffer added after a device timer's predicted on/off transition
-# before we poll, so we're asking "what happened" shortly after the
-# transition rather than racing it.
-POLL_TIMER_EVENT_BUFFER_SECONDS = 10
-
-# requestSettings response is a fixed 40-byte binary struct, NOT text.
-# Layout (little-endian, all unsigned bytes unless noted):
-#   1  program
-#   1  speed
-#   18 colors[6] (hsv triples, 3 bytes each)
-#   1  onOffSwitch
-#   7  timer1Settings
-#   7  timer2Settings
-#   1  brightness
-#   1  version
-#   1  syncMode
-#   1  direction
-#   1  unused
-SETTINGS_PACKET_LENGTH = 40
 _TIMER_STRUCT = struct.Struct("<7B")  # timerOnOff, startSunset, startHour, startMinute, endSunrise, endHour, endMinute
 
-# "requestSettings" command: [1-byte length of payload below][ASCII payload]
-REQUEST_SETTINGS_COMMAND_HEX = "0f7265717565737453657474696e6773"
-
+MAX_EXPECTED_VERSION = 50
 
 def _parse_timer(raw: bytes) -> dict:
     (timer_on_off, start_sunset, start_hour, start_minute,
@@ -60,43 +36,6 @@ def _parse_timer(raw: bytes) -> dict:
         "end_hour": end_hour,
         "end_minute": end_minute,
     }
-
-
-# Mappings for human-readable attributes
-PROGRAM_MAPPING = {
-    b"0": "Still",
-    b"B": "Blink",
-    b"W": "Twinkle",
-    b"C": "Chase",
-    b"M": "Moving Wave",
-    b"A": "Ants",
-    b"S": "Sparkle",
-    b"P": "White Sparkle",
-    b"3": "Three Block",
-    b"T": "Trains",
-    b"F": "Cross Fade",
-    b"L": "Blocks",
-    b"K": "Block Gradient",
-    b"I": "Spiral",
-    b"H": "Shimmer",
-    b"G": "Glow Worm",
-    b"Y": "Clouds",
-    b"U": "Color Pulse",
-    b"R": "Random Placement",
-    b"E": "Electric Shock",
-}
-
-DIRECTION_MAPPING = {
-    0: "Left",
-    1: "Center",
-    2: "Right"
-}
-
-SYNC_MODE_MAPPING = {
-    0: "Standalone",
-    1: "Master",
-    2: "Slave"
-}
 
 # --- Low-level write protocol -------------------------------------------
 # Mirrors the read-side layout above: a prefix byte (device's internal
@@ -174,7 +113,26 @@ def _encode_direction(code: int) -> str:
 def _encode_effect(code: str) -> str:
     return _ascii_command(CMD_PROGRAM_PREFIX, f"program{code}")
 
-def parse_settings_packet(raw_bytes: bytes) -> dict:
+@dataclass(frozen=True)
+class DeviceSettings:
+    """Structured result of parse_settings_packet."""
+    program_code: str
+    program_name: str
+    speed: int
+    colors: list[dict]
+    is_on: bool
+    timer1: dict
+    timer2: dict
+    brightness: int
+    version: int
+    sync_code: int
+    sync_name: str
+    direction_code: int
+    direction_name: str
+    raw_hex: str
+    last_updated: str
+
+def parse_settings_packet(raw_bytes: bytes) -> DeviceSettings:
     """Parse the 40-byte requestSettings response into structured fields."""
     if len(raw_bytes) < SETTINGS_PACKET_LENGTH:
         raise ValueError(
@@ -202,7 +160,6 @@ def parse_settings_packet(raw_bytes: bytes) -> dict:
             and direction in DIRECTION_MAPPING
         )
 
-    MAX_EXPECTED_VERSION = 50
     swapped = packet[20:] + packet[:20]
 
     as_received_ok = _is_plausible_orientation(packet)
@@ -266,23 +223,23 @@ def parse_settings_packet(raw_bytes: bytes) -> dict:
     direction_name = DIRECTION_MAPPING.get(direction_code, "Unknown")
     offset += 1
 
-    return {
-        "program_code": program_code,
-        "program_name": program_name,
-        "speed": speed,
-        "colors": colors,
-        "is_on": bool(on_off_switch),
-        "timer1": timer1,
-        "timer2": timer2,
-        "brightness": brightness,
-        "version": version,
-        "sync_code": sync_code,
-        "sync_name": sync_name,
-        "direction_code": direction_code,
-        "direction_name": direction_name,
-        "raw_hex": packet.hex(),
-        "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
+    return DeviceSettings(
+        program_code=program_code,
+        program_name=program_name,
+        speed=speed,
+        colors=colors,
+        is_on=bool(on_off_switch),
+        timer1=timer1,
+        timer2=timer2,
+        brightness=brightness,
+        version=version,
+        sync_code=sync_code,
+        sync_name=sync_name,
+        direction_code=direction_code,
+        direction_name=direction_name,
+        raw_hex=packet.hex(),
+        last_updated=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    )
 
 
 class GenericBTBleakError(Exception):
@@ -322,7 +279,7 @@ class GenericBTDevice:
         self._notify_active: bool = False
         self._state_callbacks: list[Callable[[], None]] = []
         self.last_notification_value: Optional[str] = None
-        self.last_notification_data: Optional[dict] = None
+        self.last_notification_data: Optional[DeviceSettings] = None
 
         # Fragmented-notification reassembly. Bytes accumulate here across
         # multiple _handle_notification calls until we have a full packet
@@ -365,7 +322,7 @@ class GenericBTDevice:
         write_uuid: str,
         notify_uuid: Optional[str] = None,
         timeout: float = NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
-    ) -> dict:
+    ) -> DeviceSettings:
         """Connect, request settings, and guarantee the result is stored + published.
 
         This is the one entry point periodic polling and the sync_state
@@ -556,7 +513,7 @@ class GenericBTDevice:
 
         return _remove
 
-    def _update_notification_value(self, message: Optional[str], parsed: Optional[dict] = None) -> None:
+    def _update_notification_value(self, message: Optional[str], parsed: Optional[DeviceSettings] = None) -> None:
         """Record the latest decoded reading and always publish it.
         """
         if message is None:
@@ -570,7 +527,7 @@ class GenericBTDevice:
                 state_callback()
         self._schedule_next_poll()
 
-    def _decode_data(self, data) -> tuple[Optional[str], Optional[dict]]:
+    def _decode_data(self, data) -> tuple[Optional[str], Optional[DeviceSettings]]:
         """Decode a raw GATT payload.
 
         Returns (display_value, parsed_fields). The payload is a fixed-size
@@ -670,7 +627,7 @@ class GenericBTDevice:
         if self._notification_buffer:
             self._start_reassembly_timer()
 
-    def _resolve_pending_response_futures(self, parsed: Optional[dict]) -> None:
+    def _resolve_pending_response_futures(self, parsed: Optional[DeviceSettings]) -> None:
         futures, self._pending_response_futures = self._pending_response_futures, []
         for future in futures:
             if not future.done():
@@ -775,7 +732,7 @@ class GenericBTDevice:
         *,
         notify_uuid: Optional[str] = None,
         timeout: float = NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
-    ) -> Optional[dict]:
+    ) -> Optional[DeviceSettings]:
         """Subscribe (if needed), send a write command, and wait for the next full response.
 
         Ensures notifications are subscribed on `notify_uuid` (or the
@@ -783,7 +740,7 @@ class GenericBTDevice:
         `command_hex` to `write_uuid`, then waits for a complete
         (SETTINGS_PACKET_LENGTH-byte) notification to be reassembled.
 
-        Returns the parsed settings dict, or None if no complete response
+        Returns the parsed settings class, or None if no complete response
         arrived within `timeout` seconds.
         """
         if notify_uuid is not None:
@@ -813,7 +770,7 @@ class GenericBTDevice:
         write_uuid: str,
         notify_uuid: Optional[str] = None,
         timeout: float = NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
-    ) -> Optional[dict]:
+    ) -> Optional[DeviceSettings]:
         """Convenience wrapper: send the requestSettings command and wait for the parsed reply."""
         return await self.request_and_wait(
             write_uuid, REQUEST_SETTINGS_COMMAND_HEX, notify_uuid=notify_uuid, timeout=timeout
@@ -923,8 +880,7 @@ class GenericBTDevice:
         now = datetime.now()
         candidates: list[float] = []
 
-        for timer_key in ("timer1", "timer2"):
-            timer = data.get(timer_key)
+        for timer in (data.timer1, data.timer2):
             if not timer or not timer.get("timer_on_off"):
                 continue
             for sun_flag_key, hour_key, minute_key in (

@@ -1,6 +1,6 @@
 """Constants"""
 import voluptuous as vol
-from enum import Enum
+from enum import Enum, IntEnum
 
 from homeassistant.helpers.config_validation import make_entity_service_schema
 import homeassistant.helpers.config_validation as cv
@@ -44,6 +44,106 @@ COLOR_PALETTES: dict[str, [[int]]] = {
 }
 
 COLOR_PALETTE_NAMES = list(COLOR_PALETTES.keys())
+
+class Direction(IntEnum):
+    Left = 0
+    Center = 1
+    Right = 2
+
+DIRECTION_MAPPING: dict[int, str] = {d.value: d.name for d in Direction}
+DIRECTION_NAMES: list[str] = [d.name for d in Direction]
+DIRECTIONS: list[tuple[str, int]] = [(d.name, d.value) for d in Direction]
+DIRECTION_CODES: dict[str, int] = {d.name: d.value for d in Direction}
+
+class Effect(str, Enum):
+    Still = "0"
+    Blink = "B"
+    Twinkle = "W"
+    Chase = "C"
+    MovingWave = "M"
+    Ants = "A"
+    Sparkle = "S"
+    WhiteSparkle = "P"
+    ThreeBlock = "3"
+    Trains = "T"
+    CrossFade = "F"
+    Blocks = "L"
+    BlockGradient = "K"
+    Spiral = "I"
+    Shimmer = "H"
+    GlowWorm = "G"
+    Clouds = "Y"
+    ColorPulse = "U"
+    RandomPlacement = "R"
+    ElectricShock = "E"
+
+# Human-readable names differ from the enum member names above (which must be
+# valid identifiers), so keep an explicit label map keyed by the enum member.
+EFFECT_LABELS: dict[Effect, str] = {
+    Effect.Still: "Still",
+    Effect.Blink: "Blink",
+    Effect.Twinkle: "Twinkle",
+    Effect.Chase: "Chase",
+    Effect.MovingWave: "Moving Wave",
+    Effect.Ants: "Ants",
+    Effect.Sparkle: "Sparkle",
+    Effect.WhiteSparkle: "White Sparkle",
+    Effect.ThreeBlock: "Three Block",
+    Effect.Trains: "Trains",
+    Effect.CrossFade: "Cross Fade",
+    Effect.Blocks: "Blocks",
+    Effect.BlockGradient: "Block Gradient",
+    Effect.Spiral: "Spiral",
+    Effect.Shimmer: "Shimmer",
+    Effect.GlowWorm: "Glow Worm",
+    Effect.Clouds: "Clouds",
+    Effect.ColorPulse: "Color Pulse",
+    Effect.RandomPlacement: "Random Placement",
+    Effect.ElectricShock: "Electric Shock",
+}
+
+# Backward-compatible exports, derived from the enum + label map
+PROGRAM_MAPPING: dict[bytes, str] = {
+    e.value.encode(): label for e, label in EFFECT_LABELS.items()
+}
+EFFECTS: list[tuple[str, str]] = [
+    (label, e.value) for e, label in EFFECT_LABELS.items()
+]
+EFFECT_CODES: dict[str, str] = {label: e.value for e, label in EFFECT_LABELS.items()}
+CODE_TO_EFFECT: dict[str, str] = {e.value: label for e, label in EFFECT_LABELS.items()}
+
+SYNC_MODE_MAPPING = {
+    0: "Standalone",
+    1: "Master",
+    2: "Slave"
+}
+
+# Default seconds of inactivity before we auto-disconnect.
+# 0 / None disables idle-disconnect entirely.
+DEFAULT_IDLE_DISCONNECT_SECONDS = 30
+
+# Small buffer added after a device timer's predicted on/off transition
+# before we poll, so we're asking "what happened" shortly after the
+# transition rather than racing it.
+POLL_TIMER_EVENT_BUFFER_SECONDS = 10
+
+# requestSettings response is a fixed 40-byte binary struct, NOT text.
+# Layout (little-endian, all unsigned bytes unless noted):
+#   1  program
+#   1  speed
+#   18 colors[6] (hsv triples, 3 bytes each)
+#   1  onOffSwitch
+#   7  timer1Settings
+#   7  timer2Settings
+#   1  brightness
+#   1  version
+#   1  syncMode
+#   1  direction
+#   1  unused
+SETTINGS_PACKET_LENGTH = 40
+
+# "requestSettings" command: [1-byte length of payload below][ASCII payload]
+REQUEST_SETTINGS_COMMAND_HEX = "0f7265717565737453657474696e6773"
 
 class Schema(Enum):
     """General used service schema definition"""

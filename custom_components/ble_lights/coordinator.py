@@ -8,7 +8,7 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .select import GenericBTSelect
+    from .select import GenericBTColorPaletteSelect
 
 from homeassistant.components import bluetooth
 from homeassistant.components.bluetooth.active_update_coordinator import ActiveBluetoothDataUpdateCoordinator
@@ -32,7 +32,7 @@ class GenericBTCoordinator(ActiveBluetoothDataUpdateCoordinator[None]):
         self.base_unique_id = base_unique_id
         self._ready_event = asyncio.Event()
         self._was_unavailable = True
-        self.palette_select_entity: GenericBTSelect | None = None
+        self.palette_select_entity: GenericBTColorPaletteSelect | None = None
 
     @callback
     def _needs_poll(self, service_info: bluetooth.BluetoothServiceInfoBleak, seconds_since_last_poll: float | None) -> bool:
