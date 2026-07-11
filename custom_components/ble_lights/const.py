@@ -114,8 +114,8 @@ CODE_TO_EFFECT: dict[str, str] = {e.value: label for e, label in EFFECT_LABELS.i
 
 SYNC_MODE_MAPPING = {
     0: "Standalone",
-    1: "Master",
-    2: "Slave"
+    1: "Leader",
+    2: "Follower"
 }
 
 # Default seconds of inactivity before we auto-disconnect.
