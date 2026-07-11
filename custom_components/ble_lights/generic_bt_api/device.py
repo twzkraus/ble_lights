@@ -463,16 +463,19 @@ class GenericBTDevice:
             else:
                 _LOGGER.debug("Connection reused")
 
-            # Whenever we're connected, notifications for the last-desired
-            # UUID should be active - this covers the initial subscribe AND
-            # every reconnect (idle-disconnect, dropped connection, etc.),
-            # so a write made after a reconnect still gets its confirming
-            # notification captured instead of silently going nowhere.
-            await self._ensure_notify_active()
+            try:
+                await self._ensure_notify_active()
+            except BleakError as exc:
+                # The client object claimed to be connected but a GATT op just
+                # failed - the underlying connection is actually dead. Drop the
+                # stale client so the *next* get_client() call does a real
+                # reconnect instead of trusting this handle forever.
+                _LOGGER.debug("Stale connection detected while (re)arming notifications, discarding client", exc_info=True)
+                self._client = None
+                self._client_uses_context_manager = False
+                self._notify_active = False
+                raise GenericBTBleakError("Stale connection while arming notifications") from exc
 
-        # Outside the lock - resetting the timer doesn't need to block on it,
-        # and we don't want to deadlock if this ever gets called from within
-        # the idle-disconnect callback path.
         self._reset_idle_timer()
         if not was_connected:
             self._notify_listeners()
@@ -649,18 +652,32 @@ class GenericBTDevice:
 
     async def write_gatt(self, target_uuid, data):
         await self.get_client()
-        uuid_str = "{" + target_uuid + "}"
-        uuid = UUID(uuid_str)
+        uuid = self._to_uuid(target_uuid)
         data_as_bytes = bytearray.fromhex(data)
-        await self._client.write_gatt_char(uuid, data_as_bytes, True)
+        try:
+            await self._client.write_gatt_char(uuid, data_as_bytes, True)
+        except BleakError as exc:
+            _LOGGER.debug("Stale connection detected during write, discarding client", exc_info=True)
+            async with self._lock:
+                self._client = None
+                self._client_uses_context_manager = False
+                self._notify_active = False
+            raise GenericBTBleakError("Error writing GATT characteristic") from exc
         self._reset_idle_timer()
         self._schedule_next_poll()
 
     async def read_gatt(self, target_uuid):
         await self.get_client()
-        uuid_str = "{" + target_uuid + "}"
-        uuid = UUID(uuid_str)
-        data = await self._client.read_gatt_char(uuid)
+        uuid = self._to_uuid(target_uuid)
+        try:
+            data = await self._client.read_gatt_char(uuid)
+        except BleakError as exc:
+            _LOGGER.debug("Stale connection detected during read, discarding client", exc_info=True)
+            async with self._lock:
+                self._client = None
+                self._client_uses_context_manager = False
+                self._notify_active = False
+            raise GenericBTBleakError("Error reading GATT characteristic") from exc
         self._reset_idle_timer()
         return data
 
