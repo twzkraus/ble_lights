@@ -114,8 +114,8 @@ CODE_TO_EFFECT: dict[str, str] = {e.value: label for e, label in EFFECT_LABELS.i
 
 SYNC_MODE_MAPPING = {
     0: "Standalone",
-    1: "Master",
-    2: "Slave"
+    1: "Leader",
+    2: "Follower"
 }
 
 # Default seconds of inactivity before we auto-disconnect.
@@ -125,7 +125,7 @@ DEFAULT_IDLE_DISCONNECT_SECONDS = 30
 # Small buffer added after a device timer's predicted on/off transition
 # before we poll, so we're asking "what happened" shortly after the
 # transition rather than racing it.
-POLL_TIMER_EVENT_BUFFER_SECONDS = 10
+POLL_TIMER_EVENT_BUFFER_SECONDS = 20
 
 # requestSettings response is a fixed 40-byte binary struct, NOT text.
 # Layout (little-endian, all unsigned bytes unless noted):

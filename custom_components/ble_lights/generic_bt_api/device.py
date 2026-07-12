@@ -463,16 +463,19 @@ class GenericBTDevice:
             else:
                 _LOGGER.debug("Connection reused")
 
-            # Whenever we're connected, notifications for the last-desired
-            # UUID should be active - this covers the initial subscribe AND
-            # every reconnect (idle-disconnect, dropped connection, etc.),
-            # so a write made after a reconnect still gets its confirming
-            # notification captured instead of silently going nowhere.
-            await self._ensure_notify_active()
+            try:
+                await self._ensure_notify_active()
+            except BleakError as exc:
+                # The client object claimed to be connected but a GATT op just
+                # failed - the underlying connection is actually dead. Drop the
+                # stale client so the *next* get_client() call does a real
+                # reconnect instead of trusting this handle forever.
+                _LOGGER.debug("Stale connection detected while (re)arming notifications, discarding client", exc_info=True)
+                self._client = None
+                self._client_uses_context_manager = False
+                self._notify_active = False
+                raise GenericBTBleakError("Stale connection while arming notifications") from exc
 
-        # Outside the lock - resetting the timer doesn't need to block on it,
-        # and we don't want to deadlock if this ever gets called from within
-        # the idle-disconnect callback path.
         self._reset_idle_timer()
         if not was_connected:
             self._notify_listeners()
@@ -519,7 +522,8 @@ class GenericBTDevice:
         if message is None:
             return
         self.last_notification_value = message
-        self.last_notification_data = parsed
+        if parsed is not None:
+            self.last_notification_data = parsed
         if self._notification_callback is not None:
             self._notification_callback(message)
         for state_callback in list(self._state_callbacks):
@@ -619,7 +623,14 @@ class GenericBTDevice:
         message, parsed = self._decode_data(complete_bytes)
         _LOGGER.debug("Reassembled complete notification payload=%r parsed=%r", message, parsed)
         self._update_notification_value(message, parsed)
-        self._resolve_pending_response_futures(parsed)
+
+        if parsed is not None:
+            self._resolve_pending_response_futures(parsed)
+        else:
+            _LOGGER.debug(
+                "Discarding malformed reassembled packet, leaving pending futures outstanding: %s",
+                complete_bytes.hex(),
+            )
 
         # Rare: the device sent us the start of a *second* packet in the
         # same batch of fragments. Give it its own reassembly window rather
@@ -641,18 +652,32 @@ class GenericBTDevice:
 
     async def write_gatt(self, target_uuid, data):
         await self.get_client()
-        uuid_str = "{" + target_uuid + "}"
-        uuid = UUID(uuid_str)
+        uuid = self._to_uuid(target_uuid)
         data_as_bytes = bytearray.fromhex(data)
-        await self._client.write_gatt_char(uuid, data_as_bytes, True)
+        try:
+            await self._client.write_gatt_char(uuid, data_as_bytes, True)
+        except BleakError as exc:
+            _LOGGER.debug("Stale connection detected during write, discarding client", exc_info=True)
+            async with self._lock:
+                self._client = None
+                self._client_uses_context_manager = False
+                self._notify_active = False
+            raise GenericBTBleakError("Error writing GATT characteristic") from exc
         self._reset_idle_timer()
         self._schedule_next_poll()
 
     async def read_gatt(self, target_uuid):
         await self.get_client()
-        uuid_str = "{" + target_uuid + "}"
-        uuid = UUID(uuid_str)
-        data = await self._client.read_gatt_char(uuid)
+        uuid = self._to_uuid(target_uuid)
+        try:
+            data = await self._client.read_gatt_char(uuid)
+        except BleakError as exc:
+            _LOGGER.debug("Stale connection detected during read, discarding client", exc_info=True)
+            async with self._lock:
+                self._client = None
+                self._client_uses_context_manager = False
+                self._notify_active = False
+            raise GenericBTBleakError("Error reading GATT characteristic") from exc
         self._reset_idle_timer()
         return data
 
@@ -848,21 +873,28 @@ class GenericBTDevice:
             return
         _LOGGER.debug("Polling device for current settings")
         success = False
-        try:
-            await self.async_refresh_settings(self._poll_write_uuid)
-            success = True
-        except (GenericBTBleakError, GenericBTTimeoutError):
-            _LOGGER.debug("Poll failed to connect/communicate with device", exc_info=True)
-        except Exception:  # pylint: disable=broad-except
-            _LOGGER.debug("Unexpected error while polling", exc_info=True)
-        finally:
-            # Always reschedule, even after a failure/timeout, so a
-            # transient BLE hiccup doesn't permanently stop polling.
-            if success:
-                self._schedule_next_poll()
-            else:
-                _LOGGER.debug("Poll failed; scheduling retry in 5 minutes")
-                self._schedule_next_poll(override_delay=300.0)
+        for attempt in range(2):  # one quick retry before the longer backoff
+            try:
+                await self.async_refresh_settings(self._poll_write_uuid)
+                success = True
+                break
+            except GenericBTTimeoutError:
+                if attempt == 0:
+                    _LOGGER.debug("Poll got no usable response, retrying now")
+                    continue
+                _LOGGER.debug("Poll timed out again on retry", exc_info=True)
+            except GenericBTBleakError:
+                _LOGGER.debug("Poll failed to connect/communicate with device", exc_info=True)
+                break  # connectivity issue - retrying immediately won't help, go to retry with override_delay
+            except Exception:  # pylint: disable=broad-except
+                _LOGGER.debug("Unexpected error while polling", exc_info=True)
+                break
+
+        if success:
+            self._schedule_next_poll()
+        else:
+            _LOGGER.debug("Poll failed; scheduling retry in 5 minutes")
+            self._schedule_next_poll(override_delay=300.0)
 
     def _seconds_until_next_timer_event(self) -> Optional[float]:
         """Seconds until nearest scheduled on/off transition, or None.
