@@ -180,6 +180,12 @@ It includes a tile card on the dashboard that, on click:
 - Connects to the device
 - Opens the Browser mod modal to show more device settings
 
+### Video
+
+<video width="180" height="360" controls>
+  <source src="./images/dashboard-card-and-popup.MP4" />
+</video>
+
 ### Screenshots
 
 #### Main dashboard card
@@ -191,8 +197,8 @@ type: tile
 grid_options:
   columns: 6
   rows: 1
-entity: light.<your_device_name>
-name: My Lights
+entity: light.<your_light>
+name: <your_light_name>
 vertical: false
 tap_action:
   action: fire-dom-event
@@ -202,10 +208,10 @@ tap_action:
       sequence:
         - service: browser_mod.more_info
           data:
-            entity: light.<your_device_name>
+            entity: light.<your_light>
         - service: switch.turn_on
           target:
-            entity_id: switch.<your_device_name>_connection
+            entity_id: switch.<your_light>_connection
 features_position: bottom
 ```
 
@@ -225,7 +231,7 @@ content: >-
   set ns.r, ns.g, ns.b = c, 0, x -%}{%- endif -%}#{{ '%02x' % (((ns.r + m) *
   255) | round | int) }}{{ '%02x' % (((ns.g + m) * 255) | round | int) }}{{
   '%02x' % (((ns.b + m) * 255) | round | int) }}{%- endmacro -%} {% for hsv in
-  state_attr('light.<your_device_name>', 'colors') %}{% if hsv.hue
+  state_attr('light.<your_light>', 'colors') %}{% if hsv.hue
   + hsv.saturation + hsv.value > 0 %}![dot](data:image/svg+xml,{{ ('<svg
   xmlns="http://www.w3.org/2000/svg" width="26" height="26"><circle cx="13"
   cy="13" r="12" fill="' ~ hsv_to_hex(hsv.hue, hsv.saturation, hsv.value) ~ '"
@@ -247,7 +253,8 @@ card:
   cards:
     - type: markdown
       content: >-
-        {% set state = states("switch.<your_device_name>_connection") %}
+        {% set state =
+        states("switch.<your_light>_connection") %}
 
         {{
           '✅ Connected' if state == "on"
@@ -256,6 +263,10 @@ card:
         }}
       text_only: true
     - type: markdown
+      visibility:
+        - condition: state
+          entity: switch.<your_light>_connection
+          state: "on"
       text_only: true
       content: >-
         {% macro hsv_to_hex(h, s, v) -%}{%- set ns = namespace(r=0, g=0, b=0)
@@ -269,7 +280,7 @@ card:
         0, x -%}{%- endif -%}#{{ '%02x' % (((ns.r + m) * 255) | round | int)
         }}{{ '%02x' % (((ns.g + m) * 255) | round | int) }}{{ '%02x' % (((ns.b +
         m) * 255) | round | int) }}{%- endmacro -%} {% for hsv in
-        state_attr('light.<your_device_name>', 'colors') %}{% if
+        state_attr('light.<your_light>', 'colors') %}{% if
         hsv.hue + hsv.saturation + hsv.value > 0 %}![dot](data:image/svg+xml,{{
         ('<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26"><circle
         cx="13" cy="13" r="12" fill="' ~ hsv_to_hex(hsv.hue, hsv.saturation,
@@ -277,28 +288,50 @@ card:
         }})&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{% endif %}{% endfor
         %}
     - type: custom:mushroom-select-card
-      entity: select.<your_device_name>_color_palette
+      visibility:
+        - condition: state
+          entity: switch.<your_light>_connection
+          state: "on"
+      entity: select.<your_light>_color_palette
       name: Color Palette
     - type: tile
       grid_options:
         columns: 12
         rows: 2
-      entity: light.<your_device_name>
-      name: Brightness
+      visibility:
+        - condition: state
+          entity: switch.<your_light>_connection
+          state: "on"
+      entity: light.<your_light>
+      name: Light and Brightness
       vertical: false
       tap_action:
         action: more-info
       features:
         - type: light-brightness
       features_position: bottom
+    - type: custom:mushroom-number-card
+      visibility:
+        - condition: state
+          entity: switch.<your_light>_connection
+          state: "on"
+      entity: number.<your_light>_effect_speed
+      name: Speed
+    - type: custom:mushroom-select-card
+      visibility:
+        - condition: state
+          entity: switch.<your_light>_connection
+          state: "on"
+      entity: select.<your_light>_effect_direction
+      name: Direction
     - type: markdown
       content: >-
         {{ 'Last synced: ' ~
-        time_since(as_datetime(state_attr("light.<your_device_name>",
+        time_since(as_datetime(state_attr("light.<your_light>",
         "last_updated"))) ~ ' ago'}}
       text_only: true
-title: Little Lights
-popup_card_id: ble-lights-<your_device_name>
+title: <your_light_name>
+popup_card_id: <your_light>-popup-card
 popup_card_all_views: false
 right_button_close: true
 left_button_close: true
@@ -311,10 +344,10 @@ left_button_action:
   - action: browser_mod.navigate
     metadata: {}
     data:
-      path: /config/devices/device/<device_id>
+      path: /config/devices/device/<your_device_id>
 target:
   entity_id:
-    - light.<your_device_name>
+    - light.<your_light>
 left_button: Settings
 ```
 
