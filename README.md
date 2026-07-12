@@ -182,9 +182,7 @@ It includes a tile card on the dashboard that, on click:
 
 ### Video
 
-<video width="180" height="360" controls>
-  <source src="./images/dashboard-card-and-popup.MP4" />
-</video>
+https://github.com/user-attachments/assets/731e6d04-04ee-4133-b7a6-3183954feb8f
 
 ### Screenshots
 
