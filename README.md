@@ -111,6 +111,7 @@ Color palette selector. Color palettes:
 - Go Pack Go
 - Halloween
 - Hydrangea
+- ITFDB
 - Lindsay
 - Mardi Gras
 - Moonlight
