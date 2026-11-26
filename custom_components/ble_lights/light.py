@@ -6,7 +6,6 @@ from typing import Any, Callable
 from dataclasses import asdict
 
 import voluptuous as vol
-from bleak.exc import BleakError
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
@@ -17,6 +16,7 @@ from homeassistant.components.light import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv, entity_platform
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -24,7 +24,13 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from .const import CODE_TO_EFFECT, COLOR_PALETTES, COLOR_PALETTE_NAMES, DEFAULT_WRITE_UUID, DIRECTION_CODES, DIRECTIONS, DOMAIN, EFFECT_CODES, EFFECTS
 from .coordinator import GenericBTCoordinator
 from .entity import GenericBTEntity
-from .generic_bt_api.device import SETTINGS_PACKET_LENGTH, NUM_COLOR_SLOTS, parse_settings_packet
+from .generic_bt_api.device import (
+    GenericBTBleakError,
+    GenericBTTimeoutError,
+    NUM_COLOR_SLOTS,
+    SETTINGS_PACKET_LENGTH,
+    parse_settings_packet,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -180,14 +186,14 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
             await self._async_apply_brightness(kwargs[ATTR_BRIGHTNESS])
 
         self.async_write_ha_state()
-        await self._async_confirm_state()
+        await self._async_confirm_state(expect_on=True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the light off."""
         await self._device.turn_off(DEFAULT_WRITE_UUID)
         self._attr_is_on = False
         self.async_write_ha_state()
-        await self._async_confirm_state()
+        await self._async_confirm_state(expect_on=False)
 
 
     # ---------------------------- Custom Services --------------------------------
@@ -263,7 +269,7 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
             self._attr_is_on = True
 
         self.async_write_ha_state()
-        await self._async_confirm_state()
+        await self._async_confirm_state(expect_on=True)
 
     async def async_apply_scene(self, settings: str) -> None:
         """Entity service: take a 40-byte requestSettings hex string (as
@@ -300,29 +306,42 @@ class GenericBTLight(GenericBTEntity, LightEntity, RestoreEntity):
             self._attr_effect = effect_name
 
         self.async_write_ha_state()
-        await self._async_confirm_state()
+        await self._async_confirm_state(expect_on=parsed.is_on)
 
-    async def _async_confirm_state(self) -> None:
+    async def _async_confirm_state(self, *, expect_on: bool) -> None:
         """Reconcile optimistic state against the device's actual settings.
 
-        The device doesn't push state changes on its own - update() drives
-        a full subscribe/request/listen/parse round-trip against
-        currentSettings. On success this invokes _handle_state_update via
-        the same callback GenericBTStateSensor uses, which overwrites
-        whatever we set optimistically above with real decoded values. If
-        the round-trip fails, the optimistic state stands as our best
-        guess rather than leaving the entity in a stale/unknown state.
+        A complete settings packet must begin after the request is written.
+        A missing response or a confirmed mismatch is reported to Home
+        Assistant instead of leaving a failed command looking successful.
         """
         try:
-            await self._device.request_settings(DEFAULT_WRITE_UUID)
-        except BleakError:
+            settings = await self._device.request_settings(DEFAULT_WRITE_UUID)
+        except (GenericBTBleakError, GenericBTTimeoutError) as err:
             _LOGGER.warning(
-                "%s: could not connect to confirm state after write; showing optimistic state",
+                "%s: failed to confirm state after write: %s",
                 self.entity_id,
+                err,
             )
-        except Exception:  # pylint: disable=broad-except
-            _LOGGER.exception(
-                "%s: unexpected error confirming state after write", self.entity_id
+            raise HomeAssistantError(
+                f"Could not confirm state for {self.entity_id} after write"
+            ) from err
+
+        if settings is None:
+            _LOGGER.warning("%s: no settings response received after write", self.entity_id)
+            raise HomeAssistantError(
+                f"No settings response received for {self.entity_id} after write"
+            )
+
+        if settings.is_on != expect_on:
+            _LOGGER.warning(
+                "%s: device reported is_on=%s after command expected is_on=%s",
+                self.entity_id,
+                settings.is_on,
+                expect_on,
+            )
+            raise HomeAssistantError(
+                f"Device did not reach is_on={expect_on} for {self.entity_id}"
             )
 
 # ---------------------------- Private Helpers --------------------------------

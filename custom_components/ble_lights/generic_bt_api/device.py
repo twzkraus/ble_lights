@@ -132,6 +132,13 @@ class DeviceSettings:
     raw_hex: str
     last_updated: str
 
+
+@dataclass
+class _PendingResponse:
+    future: asyncio.Future
+    after_packet_sequence: Optional[int] = None
+
+
 def parse_settings_packet(raw_bytes: bytes) -> DeviceSettings:
     """Parse the 40-byte requestSettings response into structured fields."""
     if len(raw_bytes) < SETTINGS_PACKET_LENGTH:
@@ -285,11 +292,13 @@ class GenericBTDevice:
         # multiple _handle_notification calls until we have a full packet
         # (or the reassembly timer fires and we give up on this attempt).
         self._notification_buffer: bytearray = bytearray()
+        self._notification_packet_sequence = 0
+        self._notification_buffer_sequence: Optional[int] = None
         self._reassembly_timer_handle: Optional[asyncio.TimerHandle] = None
 
-        # Futures for callers awaiting the next complete response via
-        # request_and_wait()/request_settings().
-        self._pending_response_futures: list[asyncio.Future] = []
+        # Requests only accept packets whose first fragment arrived after the
+        # corresponding GATT write began.
+        self._pending_response_futures: list[_PendingResponse] = []
 
         # Periodic polling bookkeeping (see "--- Polling ---" section below).
         self._poll_timer_handle: Optional[asyncio.TimerHandle] = None
@@ -359,6 +368,7 @@ class GenericBTDevice:
         self._state_callbacks = []
         self._cancel_reassembly_timer()
         self._notification_buffer = bytearray()
+        self._notification_buffer_sequence = None
         self._fail_pending_response_futures(RuntimeError("Device stopped"))
 
     @property
@@ -577,6 +587,8 @@ class GenericBTDevice:
         )
 
         if not self._notification_buffer:
+            self._notification_packet_sequence += 1
+            self._notification_buffer_sequence = self._notification_packet_sequence
             self._start_reassembly_timer()
 
         self._notification_buffer.extend(fragment)
@@ -599,6 +611,7 @@ class GenericBTDevice:
     def _on_reassembly_timeout(self) -> None:
         """Give up on an incomplete fragment sequence."""
         self._reassembly_timer_handle = None
+        packet_sequence = self._notification_buffer_sequence
         if self._notification_buffer:
             _LOGGER.debug(
                 "Discarding %d incomplete notification bytes after %.0fs reassembly timeout: %s",
@@ -607,62 +620,113 @@ class GenericBTDevice:
                 bytes(self._notification_buffer).hex(),
             )
         self._notification_buffer = bytearray()
-        self._fail_pending_response_futures(
-            TimeoutError(f"No complete {SETTINGS_PACKET_LENGTH}-byte response within "
-                         f"{NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS}s")
-        )
+        self._notification_buffer_sequence = None
+        if packet_sequence is not None:
+            self._fail_pending_response_futures(
+                TimeoutError(
+                    f"No complete {SETTINGS_PACKET_LENGTH}-byte response within "
+                    f"{NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS}s"
+                ),
+                packet_sequence,
+            )
 
     def _complete_reassembly(self) -> None:
         """We have >= a full packet's worth of bytes - decode it and surface the result."""
         self._cancel_reassembly_timer()
 
-        complete_bytes = bytes(self._notification_buffer[:SETTINGS_PACKET_LENGTH])
-        leftover = self._notification_buffer[SETTINGS_PACKET_LENGTH:]
-        self._notification_buffer = bytearray(leftover)
+        while len(self._notification_buffer) >= SETTINGS_PACKET_LENGTH:
+            packet_sequence = self._notification_buffer_sequence
+            if packet_sequence is None:
+                raise RuntimeError("Complete notification has no packet sequence")
 
-        message, parsed = self._decode_data(complete_bytes)
-        _LOGGER.debug("Reassembled complete notification payload=%r parsed=%r", message, parsed)
-        self._update_notification_value(message, parsed)
+            complete_bytes = bytes(self._notification_buffer[:SETTINGS_PACKET_LENGTH])
+            leftover = self._notification_buffer[SETTINGS_PACKET_LENGTH:]
+            self._notification_buffer = bytearray(leftover)
+            if leftover:
+                self._notification_packet_sequence += 1
+                self._notification_buffer_sequence = self._notification_packet_sequence
+            else:
+                self._notification_buffer_sequence = None
 
-        if parsed is not None:
-            self._resolve_pending_response_futures(parsed)
-        else:
-            _LOGGER.debug(
-                "Discarding malformed reassembled packet, leaving pending futures outstanding: %s",
-                complete_bytes.hex(),
-            )
+            message, parsed = self._decode_data(complete_bytes)
+            _LOGGER.debug("Reassembled complete notification payload=%r parsed=%r", message, parsed)
+            self._update_notification_value(message, parsed)
 
-        # Rare: the device sent us the start of a *second* packet in the
-        # same batch of fragments. Give it its own reassembly window rather
-        # than silently dropping it.
+            if parsed is not None:
+                self._resolve_pending_response_futures(parsed, packet_sequence)
+            else:
+                _LOGGER.debug(
+                    "Discarding malformed reassembled packet, leaving pending futures outstanding: %s",
+                    complete_bytes.hex(),
+                )
+
         if self._notification_buffer:
             self._start_reassembly_timer()
 
-    def _resolve_pending_response_futures(self, parsed: Optional[DeviceSettings]) -> None:
-        futures, self._pending_response_futures = self._pending_response_futures, []
-        for future in futures:
-            if not future.done():
-                future.set_result(parsed)
+    def _resolve_pending_response_futures(
+        self, parsed: DeviceSettings, packet_sequence: int
+    ) -> None:
+        pending, self._pending_response_futures = self._pending_response_futures, []
+        for request in pending:
+            if request.future.done():
+                continue
+            if (
+                request.after_packet_sequence is not None
+                and packet_sequence > request.after_packet_sequence
+            ):
+                request.future.set_result(parsed)
+            else:
+                self._pending_response_futures.append(request)
 
-    def _fail_pending_response_futures(self, exc: Exception) -> None:
-        futures, self._pending_response_futures = self._pending_response_futures, []
-        for future in futures:
-            if not future.done():
-                future.set_exception(exc)
+    def _fail_pending_response_futures(
+        self, exc: Exception, packet_sequence: Optional[int] = None
+    ) -> None:
+        pending, self._pending_response_futures = self._pending_response_futures, []
+        for request in pending:
+            if request.future.done():
+                continue
+            if (
+                packet_sequence is None
+                or (
+                    request.after_packet_sequence is not None
+                    and packet_sequence > request.after_packet_sequence
+                )
+            ):
+                request.future.set_exception(exc)
+            else:
+                self._pending_response_futures.append(request)
 
-    async def write_gatt(self, target_uuid, data):
+    async def write_gatt(
+        self,
+        target_uuid,
+        data,
+        *,
+        on_write_started: Optional[Callable[[], None]] = None,
+    ):
         await self.get_client()
         uuid = self._to_uuid(target_uuid)
         data_as_bytes = bytearray.fromhex(data)
+        if on_write_started is not None:
+            on_write_started()
         try:
             await self._client.write_gatt_char(uuid, data_as_bytes, True)
         except BleakError as exc:
-            _LOGGER.debug("Stale connection detected during write, discarding client", exc_info=True)
+            _LOGGER.debug(
+                "GATT write failed for UUID %s payload=%s; discarding stale connection",
+                target_uuid,
+                data_as_bytes.hex(),
+                exc_info=True,
+            )
             async with self._lock:
                 self._client = None
                 self._client_uses_context_manager = False
                 self._notify_active = False
             raise GenericBTBleakError("Error writing GATT characteristic") from exc
+        _LOGGER.debug(
+            "GATT write acknowledged by remote server: UUID %s payload=%s",
+            target_uuid,
+            data_as_bytes.hex(),
+        )
         self._reset_idle_timer()
         self._schedule_next_poll()
 
@@ -758,12 +822,13 @@ class GenericBTDevice:
         notify_uuid: Optional[str] = None,
         timeout: float = NOTIFICATION_REASSEMBLY_TIMEOUT_SECONDS,
     ) -> Optional[DeviceSettings]:
-        """Subscribe (if needed), send a write command, and wait for the next full response.
+        """Subscribe if needed, write a command, and await a fresh full response.
 
         Ensures notifications are subscribed on `notify_uuid` (or the
         already-active subscription if `notify_uuid` is omitted), sends
         `command_hex` to `write_uuid`, then waits for a complete
-        (SETTINGS_PACKET_LENGTH-byte) notification to be reassembled.
+        (SETTINGS_PACKET_LENGTH-byte) notification whose first fragment
+        arrived after the write began.
 
         Returns the parsed settings class, or None if no complete response
         arrived within `timeout` seconds.
@@ -779,16 +844,23 @@ class GenericBTDevice:
             await self.get_client()
 
         response_future: asyncio.Future = asyncio.get_event_loop().create_future()
-        self._pending_response_futures.append(response_future)
+        pending_response = _PendingResponse(response_future)
+        self._pending_response_futures.append(pending_response)
+
+        def _mark_response_boundary() -> None:
+            pending_response.after_packet_sequence = self._notification_packet_sequence
+
         try:
-            await self.write_gatt(write_uuid, command_hex)
+            await self.write_gatt(
+                write_uuid, command_hex, on_write_started=_mark_response_boundary
+            )
             return await asyncio.wait_for(response_future, timeout=timeout)
         except (asyncio.TimeoutError, TimeoutError):
             _LOGGER.debug("Timed out waiting for a complete response to command %s", command_hex)
             return None
         finally:
             with suppress(ValueError):
-                self._pending_response_futures.remove(response_future)
+                self._pending_response_futures.remove(pending_response)
 
     async def request_settings(
         self,
